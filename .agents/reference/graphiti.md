@@ -77,14 +77,14 @@ llm_client = AnthropicClient(
 ### Embedder (OpenAI)
 
 ```python
-from graphiti_core.embedder import OpenAIEmbedder
-from graphiti_core.embedder.config import EmbedderConfig
+from graphiti_core.embedder import OpenAIEmbedder, OpenAIEmbedderConfig
 
+# Note: EmbedderConfig does NOT exist — use OpenAIEmbedderConfig
 embedder = OpenAIEmbedder(
-    config=EmbedderConfig(
+    config=OpenAIEmbedderConfig(
         api_key="sk-...",
         embedding_dim=1536,
-        model="text-embedding-3-small",
+        embedding_model="text-embedding-3-small",  # param is embedding_model, not model
     )
 )
 ```
@@ -140,12 +140,14 @@ EpisodeType.message  # Conversational/chat messages
 EpisodeType.json     # Structured JSON data (repo scans, config files)
 ```
 
-### Returns: `AddEpisodeResult`
+### Returns: `AddEpisodeResults`
 
 ```python
-result.episode_id     # str: unique ID for this episode
+result.episode        # EpisodicNode: the stored episode (use result.episode.uuid for ID)
 result.nodes          # list[EntityNode]: extracted entities
 result.edges          # list[EntityEdge]: extracted relationships
+result.episodic_edges # list[EpisodicEdge]: edges from episode to entities
+result.communities    # list[CommunityNode]
 ```
 
 ### Example Usage
@@ -182,64 +184,52 @@ With 4–10 LLM calls per episode, budget accordingly for intensive usage.
 ### Method Signature
 
 ```python
-results = await graphiti.search(
+# search() returns list[EntityEdge] — NOT a SearchResults object
+edges = await graphiti.search(
     query="why did we choose JWT?",   # str: natural language or keyword query
-    config=SearchConfig(...),          # optional: tune search parameters
-    filters=SearchFilters(...),        # optional: filter by group_id, date, etc.
-    limit=10,                          # int: max results to return
+    group_ids=["my-saas-app"],         # list[str]: namespace filter (use this, not filters=)
+    num_results=10,                    # int: max results (NOT limit=)
+    search_filter=None,                # optional SearchFilters for date/label filtering
 )
 ```
 
-### SearchConfig
+### SearchFilters (for date/label filtering)
 
 ```python
-from graphiti_core.search.search_config import SearchConfig
-
-config = SearchConfig(
-    bm25_limit=5,        # Max results from BM25 keyword search
-    vector_limit=5,      # Max results from vector similarity search
-    bfs_limit=5,         # Max results from graph BFS traversal
-    reranker="rrf",      # Reranking algorithm: "rrf" (Reciprocal Rank Fusion, default)
-)
-```
-
-### SearchFilters (Namespace Isolation)
-
-```python
-from graphiti_core.search.search_config import SearchFilters
+# Import from search_filters, NOT search_config
+from graphiti_core.search.search_filters import SearchFilters
 
 filters = SearchFilters(
-    group_ids=["my-saas-app"],   # IMPORTANT: always filter by project's group_id
+    node_labels=["Entity"],
+    edge_types=["RELATES_TO"],
+    # date filters also available
 )
+# Pass as: search_filter=filters
 ```
 
-**CRITICAL:** Always pass `group_ids` in filters to prevent cross-project knowledge contamination.
+**Note:** Namespace isolation is achieved via `group_ids=` parameter directly on `search()`, not via `SearchFilters`. `SearchFilters` is for label/type/date filtering only.
 
-### Returns: `SearchResults`
+### Returns: `list[EntityEdge]`
 
 ```python
-results.nodes    # list[EntityNode]: matching entity nodes
-results.edges    # list[EntityEdge]: matching relationships
-results.episodes # list[EpisodeNode]: matching raw episodes
+# search() returns a flat list of EntityEdge objects
+for edge in edges:
+    print(f"Fact: {edge.fact}")
+    print(f"Edge name: {edge.name}")
+    print(f"Created: {edge.created_at}")
 ```
 
-### Example: Hybrid Search with Namespace Isolation
+### Example: Search with Namespace Isolation
 
 ```python
-from graphiti_core.search.search_config import SearchConfig, SearchFilters
-
-results = await graphiti.search(
+edges = await graphiti.search(
     query="Supabase authentication issues",
-    config=SearchConfig(bm25_limit=5, vector_limit=5, bfs_limit=3),
-    filters=SearchFilters(group_ids=["my-saas-app"]),
-    limit=10,
+    group_ids=["my-saas-app"],
+    num_results=10,
 )
 
-# Format top results
-for node in results.nodes[:5]:
-    print(f"Entity: {node.name} — {node.summary}")
-for edge in results.edges[:3]:
-    print(f"Relationship: {edge.source_node_id} → {edge.target_node_id}: {edge.fact}")
+for edge in edges[:5]:
+    print(f"- {edge.name}: {edge.fact}")
 ```
 
 ---
@@ -301,38 +291,50 @@ This is handled automatically by Graphiti — you don't need to manage timestamp
 
 ## Background Processing Pattern (Agent Harness)
 
-`remember()` stores raw episode synchronously and triggers Graphiti extraction asynchronously:
+`remember()` stores raw episode synchronously and triggers Graphiti extraction asynchronously via a **Queue + worker pool** (not a semaphore — workers provide back-pressure and graceful shutdown).
 
 ```python
 import asyncio
-from asyncio import Semaphore
 
-# Limit concurrent extractions to prevent LLM rate limit errors
-extraction_semaphore = Semaphore(4)   # 3-5 concurrent tasks max
+# server.py: create queue + start N workers at startup
+extraction_queue: asyncio.Queue = asyncio.Queue()
+worker_tasks = [
+    asyncio.create_task(_extraction_worker(extraction_queue, knowledge, projects))
+    for _ in range(settings.extraction_workers)  # default: 4
+]
 
-async def run_extraction(episode_id: str, content: str, group_id: str):
-    async with extraction_semaphore:
+async def _extraction_worker(queue, knowledge, projects):
+    while True:
+        item = await queue.get()
+        if item is None:   # shutdown sentinel
+            queue.task_done()
+            return
+        episode_id, content, category, project_id = item
         try:
-            await update_episode_status(episode_id, "processing")
-            await graphiti.add_episode(
-                name=f"ep-{episode_id}",
-                episode_body=content,
-                source=EpisodeType.text,
-                source_description="agent knowledge",
-                reference_time=datetime.now(timezone.utc),
-                group_id=group_id,
-            )
-            await update_episode_status(episode_id, "complete")
+            await projects.update_episode_status(episode_id, "processing")
+            gid = await knowledge.add_episode(episode_id, content, category, project_id)
+            await projects.update_episode_status(episode_id, "complete", gid)
         except Exception as e:
-            logger.error(f"Extraction failed for {episode_id}: {e}", exc_info=True)
-            await update_episode_status(episode_id, "failed")
+            logger.error(f"Extraction failed {episode_id}: {e}", exc_info=True)
+            await projects.update_episode_status(episode_id, "failed")
+        finally:
+            queue.task_done()
 
-# In remember() tool handler:
-task = asyncio.create_task(run_extraction(episode_id, content, project_id))
-# Store task reference to prevent GC before completion
-_background_tasks.add(task)
-task.add_done_callback(_background_tasks.discard)
+# In remember() / scanner.py: enqueue item (non-blocking put)
+episode = await projects.create_episode(project_id, content, category)
+await extraction_queue.put((episode.episode_id, content, category, project_id))
+
+# Graceful shutdown: send one None sentinel per worker, then wait for drain
+for _ in range(settings.extraction_workers):
+    await extraction_queue.put(None)
+await asyncio.wait_for(extraction_queue.join(), timeout=30.0)
 ```
+
+**Why Queue+workers over Semaphore+tasks:**
+- Workers provide natural back-pressure (queue fills up if workers can't keep pace)
+- Graceful shutdown via sentinel pattern (None item signals each worker to exit)
+- Task references are stored in `worker_tasks` list — prevents garbage collection
+- `queue.join()` waits for all in-flight items to complete on shutdown
 
 ---
 
@@ -350,7 +352,7 @@ async def init_graphiti_with_retry() -> Graphiti:
     for attempt, delay in enumerate(delays, 1):
         try:
             driver = FalkorDriver(host="localhost", port=6379)
-            graphiti = Graphiti(driver=driver, llm_client=llm, embedder=emb)
+            graphiti = Graphiti(graph_driver=driver, llm_client=llm, embedder=emb)  # graph_driver=, not driver=
             await graphiti.build_indices_and_constraints()
             logger.info("FalkorDB connected and indices ready")
             return graphiti
@@ -370,19 +372,15 @@ When `recall()` is called before background extraction completes, also search ra
 
 ```python
 async def hybrid_recall(query: str, project_id: str) -> list[dict]:
-    # Primary: graph search
+    # Primary: graph search — group_ids is a direct param, NOT via SearchFilters
     graph_results = await graphiti.search(
         query=query,
-        filters=SearchFilters(group_ids=[project_id]),
-        limit=10,
+        group_ids=[project_id],   # namespace isolation — direct param
+        num_results=10,           # NOT limit=
     )
 
     # Fallback: search raw episodes with status=pending or status=processing
-    raw_results = await search_raw_episodes(
-        query=query,
-        project_id=project_id,
-        statuses=["pending", "processing"],
-    )
+    raw_results = await projects.get_pending_episodes(project_id)
 
     return merge_and_deduplicate(graph_results, raw_results)
 ```
@@ -397,7 +395,7 @@ async def hybrid_recall(query: str, project_id: str) -> list[dict]:
 | `AuthenticationError` | Bad LLM API key | Check `LLM_API_KEY` in `.env` |
 | `RateLimitError` | Too many concurrent extractions | Reduce semaphore limit, or switch to cheaper model |
 | Index not found | `build_indices_and_constraints()` not called | Always call at startup |
-| Cross-project contamination | Missing `group_ids` filter | Always pass `filters=SearchFilters(group_ids=[project_id])` |
+| Cross-project contamination | Missing `group_ids` filter | Always pass `group_ids=[project_id]` directly to `search()` — NOT via `SearchFilters` |
 
 ---
 

@@ -242,7 +242,7 @@ async def main():
 `remember()` spawns a background extraction task via `asyncio.create_task()`. Task reference is stored to prevent garbage collection before completion.
 
 - **Exception handling:** Each task has an explicit exception handler — catches all exceptions, logs to stderr, updates episode status to `failed`
-- **Concurrency limit:** A semaphore limits simultaneous Graphiti extraction tasks to 3–5 (configurable). Prevents overwhelming the LLM API rate limits.
+- **Concurrency limit:** An `asyncio.Queue` with N worker coroutines (default 4, configurable via `EXTRACTION_WORKERS`) limits simultaneous Graphiti extraction tasks. Workers consume from the queue one item at a time, providing natural back-pressure. Prevents overwhelming the LLM API rate limits.
 - **Episode status field:** `pending | processing | complete | failed`
 - **On abrupt kill (no SIGTERM):** In-flight background tasks may be lost. The raw episode text is always safe (stored synchronously before spawning the task); only graph enrichment enrichment may be incomplete. On next startup, episodes with `status=pending` or `status=processing` can be re-queued.
 
@@ -615,14 +615,14 @@ MCP_ENV_FILE=/absolute/path/.env  # Optional: load config from explicit file pat
 - Single-user, self-hosted, no authentication (MVP)
 - All data stored locally (FalkorDB volume + SQLite file)
 - No data transmitted except to configured LLM API for entity extraction
-- FalkorDB port is **NOT exposed in `docker-compose.yml` `ports:`** — accessible on Docker network bridge only (MCP server on host reaches it via `localhost:6379` or `127.0.0.1:6379` through Docker's host networking)
+- FalkorDB port is exposed **only on `127.0.0.1:6379`** via `ports: "127.0.0.1:6379:6379"` in `docker-compose.yml` — loopback-only, not accessible from outside the machine. On Linux, Docker does NOT bridge `localhost:6379` to the container without an explicit `ports:` mapping; the binding is required.
 - Uvicorn binds to `127.0.0.1` by default — REST API not exposed to network
 
 ### Security Notes
 
 - **`.env` MUST be in `.gitignore`** — only `.env.example` (with placeholder values) is committed to source control
 - **MCP env vars are NOT inherited from the developer's shell** — all config must be placed in the `.mcp.json` `env` block or pointed to via `MCP_ENV_FILE` path. Do not assume shell env vars are available to the MCP server process.
-- **FalkorDB port isolation:** The `docker-compose.yml` MUST NOT include a `ports:` mapping for FalkorDB. The Docker daemon bridges `localhost:6379` to the container automatically via host networking on Linux, or via Docker Desktop's localhost forwarding on macOS/Windows.
+- **FalkorDB port isolation:** The `docker-compose.yml` MUST include `ports: "127.0.0.1:6379:6379"` — binds FalkorDB only on the loopback interface. On Linux, Docker does NOT auto-bridge `localhost:6379` without an explicit `ports:` mapping. The `127.0.0.1` prefix ensures the port is not reachable from external machines.
 
 ---
 
@@ -784,7 +784,7 @@ A developer can install the system in under 5 minutes and experience measurable 
 
 - ✅ FastMCP server with stdio transport
 - ✅ All 4 tools implemented and connected to Graphiti
-- ✅ FalkorDB Docker container with volume persistence (no `ports:` mapping in compose)
+- ✅ FalkorDB Docker container with volume persistence (`ports: "127.0.0.1:6379:6379"` — loopback only)
 - ✅ MCP server runs on host (not in Docker)
 - ✅ `.env.example` with configuration
 - ✅ Basic error handling; all logs to **stderr** (never stdout in stdio mode)
@@ -792,7 +792,7 @@ A developer can install the system in under 5 minutes and experience measurable 
 - ✅ FalkorDB connection retry with exponential backoff (5 attempts, ~30s total)
 - ✅ `build_indices_and_constraints()` called at startup
 - ✅ SIGTERM/SIGINT graceful shutdown handler
-- ✅ Background task semaphore (max 3–5 concurrent) and per-task exception handling
+- ✅ Background task Queue + N worker coroutines (default 4, configurable) with per-worker exception handling and graceful shutdown via sentinel pattern
 - ✅ Episode status tracking: `pending | processing | complete | failed`
 
 **Validation:** Install, connect Claude Code, init project, remember 5 insights, prime new session, recall specific knowledge.
@@ -958,10 +958,10 @@ services:
     image: falkordb/falkordb:latest  # Pin to specific version in production
     container_name: agent-harness-falkordb
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"   # loopback only — required on Linux for host→container access
     volumes:
       - falkordb_data:/data       # /data is mandatory persistence path for FalkorDB
-    # No 'ports:' section — FalkorDB is NOT exposed externally.
-    # Docker bridges localhost:6379 to the container automatically.
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "6379", "ping"]
       interval: 5s

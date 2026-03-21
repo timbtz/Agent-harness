@@ -32,6 +32,8 @@ services:
     image: falkordb/falkordb:latest
     container_name: agent-harness-falkordb
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"  # localhost only — not externally exposed
     volumes:
       - falkordb_data:/data
     healthcheck:
@@ -39,18 +41,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    # CRITICAL: NO ports: mapping here
-    # FalkorDB is accessible on localhost:6379 via Docker host networking (Linux)
-    # or Docker Desktop localhost forwarding (macOS/Windows)
 
 volumes:
   falkordb_data:
     driver: local
 ```
 
-**CRITICAL RULE: Never add `ports:` mapping to FalkorDB in docker-compose.yml.**
+**CRITICAL: Bind to `127.0.0.1:6379` only — never `0.0.0.0:6379`.**
 
-Why: Docker bridges `localhost:6379` → container automatically via host networking (Linux) or Docker Desktop forwarding (macOS/Windows). The MCP server on the host connects to `127.0.0.1:6379`. Exposing the port externally is a security risk and unnecessary.
+On Linux Docker with the default bridge network, the host cannot reach the container at `localhost:6379` without a `ports:` mapping. The `127.0.0.1:6379:6379` binding exposes the port only on the loopback interface — it is not accessible from outside the machine. Docker Desktop on macOS/Windows has automatic localhost forwarding, but the explicit binding works on both platforms.
 
 ### Start / Stop
 
@@ -315,6 +314,7 @@ from graphiti_core.driver.falkordb_driver import FalkorDriver
 driver = FalkorDriver(
     host=settings.falkordb_host,
     port=settings.falkordb_port,
+    database=project_id,  # Named database for per-project isolation (NOT integer 0)
 )
 ```
 
@@ -335,6 +335,37 @@ async def check_falkordb_health() -> bool:
     except Exception:
         return False
 ```
+
+---
+
+## Using the Sync Client in Async Code
+
+The `falkordb` Python client is **fully synchronous**. Calling it directly in an `async def` blocks the asyncio event loop for the full query duration.
+
+**Rule:** Use `asyncio.to_thread()` for any non-trivial FalkorDB query in async code.
+
+```python
+import asyncio
+from falkordb import FalkorDB
+
+async def get_graph_data(self, project_id: str) -> dict:
+    def _query() -> dict:
+        db = FalkorDB(host=self._settings.falkordb_host, port=self._settings.falkordb_port)
+        g = db.select_graph(project_id)
+        result = g.query(
+            "MATCH (n:Entity) WHERE n.group_id = $gid RETURN n.uuid, n.name, n.summary",
+            params={"gid": project_id},
+        )
+        return {"nodes": [{"id": r[0], "name": r[1], "summary": r[2]} for r in result.result_set if r[0]]}
+
+    try:
+        return await asyncio.to_thread(_query)  # Runs sync code in thread pool
+    except Exception as e:
+        logger.warning(f"Graph query failed for {project_id}: {e}")
+        return {"nodes": [], "edges": []}
+```
+
+**Exception:** `check_connection()` (health check) calls the client directly in `async def` — acceptable for a single brief `RETURN 1` query, not for multi-query data fetches.
 
 ---
 

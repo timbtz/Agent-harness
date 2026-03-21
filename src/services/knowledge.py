@@ -77,9 +77,7 @@ class KnowledgeService:
         try:
             from falkordb import FalkorDB
 
-            db = FalkorDB(
-                host=self._settings.falkordb_host, port=self._settings.falkordb_port
-            )
+            db = FalkorDB(host=self._settings.falkordb_host, port=self._settings.falkordb_port)
             g = db.select_graph("_health_check")
             g.query("RETURN 1")
             return True
@@ -103,9 +101,7 @@ class KnowledgeService:
             logger.info(f"Graphiti instance created for project: {project_id}")
         return self._graphiti_cache[project_id]
 
-    async def add_episode(
-        self, episode_id: str, content: str, category: str, project_id: str
-    ) -> str:
+    async def add_episode(self, episode_id: str, content: str, category: str, project_id: str) -> str:
         g = await self.get_graphiti(project_id)
         result = await g.add_episode(
             name=f"ep-{episode_id}",
@@ -117,9 +113,7 @@ class KnowledgeService:
         )
         return result.episode.uuid
 
-    async def search(
-        self, query: str, project_id: str, limit: int = 10
-    ) -> list[SearchResult]:
+    async def search(self, query: str, project_id: str, limit: int = 10) -> list[SearchResult]:
         try:
             g = await self.get_graphiti(project_id)
             # search() returns list[EntityEdge]
@@ -147,12 +141,34 @@ class KnowledgeService:
         return search_results[:limit]
 
     async def get_graph_data(self, project_id: str) -> dict:
-        return {"nodes": [], "edges": []}
+        def _query() -> dict:
+            from falkordb import FalkorDB
 
-    async def get_insights(
-        self, project_id: str, page: int, limit: int, category: str | None
-    ) -> dict:
-        return {"items": [], "total": 0, "page": page, "limit": limit}
+            db = FalkorDB(
+                host=self._settings.falkordb_host,
+                port=self._settings.falkordb_port,
+            )
+            g = db.select_graph(project_id)
+            nodes_result = g.query(
+                "MATCH (n:Entity) WHERE n.group_id = $gid RETURN n.uuid, n.name, n.summary",
+                params={"gid": project_id},
+            )
+            nodes = [{"id": row[0], "name": row[1], "summary": row[2]} for row in nodes_result.result_set if row[0]]
+            edges_result = g.query(
+                "MATCH (a:Entity)-[r]->(b:Entity) "
+                "WHERE r.group_id = $gid AND r.invalid_at IS NULL "
+                "RETURN a.uuid, b.uuid, r.fact, type(r)",
+                params={"gid": project_id},
+            )
+            edges = [
+                {"source": row[0], "target": row[1], "fact": row[2], "type": row[3]}
+                for row in edges_result.result_set
+                if row[0] and row[1]
+            ]
+            return {"nodes": nodes, "edges": edges}
 
-    async def get_timeline(self, project_id: str) -> list[dict]:
-        return []
+        try:
+            return await asyncio.to_thread(_query)
+        except Exception as e:
+            logger.warning(f"Graph data query failed for {project_id}: {e}")
+            return {"nodes": [], "edges": []}

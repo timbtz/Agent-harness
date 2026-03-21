@@ -79,9 +79,7 @@ class ProjectsService:
                     episode_count=row["episode_count"],
                 )
 
-    async def create_project(
-        self, name: str, description: str, repo_path: str | None = None
-    ) -> Project:
+    async def create_project(self, name: str, description: str, repo_path: str | None = None) -> Project:
         project_id = slugify(name)
         created_at = datetime.now(timezone.utc)
         async with aiosqlite.connect(self._db_path) as db:
@@ -126,9 +124,7 @@ class ProjectsService:
                 row = await cursor.fetchone()
                 return row[0] if row else 0
 
-    async def create_episode(
-        self, project_id: str, content: str, category: str
-    ) -> Episode:
+    async def create_episode(self, project_id: str, content: str, category: str) -> Episode:
         episode_id = "ep_" + uuid4().hex[:12]
         created_at = datetime.now(timezone.utc)
         async with aiosqlite.connect(self._db_path) as db:
@@ -171,9 +167,7 @@ class ProjectsService:
                 rows = await cursor.fetchall()
                 return [_row_to_episode(row) for row in rows]
 
-    async def get_recent_episodes(
-        self, project_id: str, limit: int = 5
-    ) -> list[Episode]:
+    async def get_recent_episodes(self, project_id: str, limit: int = 5) -> list[Episode]:
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
@@ -185,11 +179,49 @@ class ProjectsService:
 
     async def count_episodes(self, project_id: str) -> int:
         async with aiosqlite.connect(self._db_path) as db:
-            async with db.execute(
-                "SELECT COUNT(*) FROM episodes WHERE project_id = ?", (project_id,)
-            ) as cursor:
+            async with db.execute("SELECT COUNT(*) FROM episodes WHERE project_id = ?", (project_id,)) as cursor:
                 row = await cursor.fetchone()
                 return row[0] if row else 0
+
+    async def get_insights(
+        self,
+        project_id: str,
+        page: int,
+        limit: int,
+        category: str | None,
+    ) -> dict:
+        offset = (page - 1) * limit
+        if category:
+            count_sql = "SELECT COUNT(*) FROM episodes WHERE project_id = ? AND category = ?"
+            count_params = (project_id, category)
+            items_sql = (
+                "SELECT * FROM episodes WHERE project_id = ? AND category = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            )
+            items_params = (project_id, category, limit, offset)
+        else:
+            count_sql = "SELECT COUNT(*) FROM episodes WHERE project_id = ?"
+            count_params = (project_id,)
+            items_sql = "SELECT * FROM episodes WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            items_params = (project_id, limit, offset)
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(count_sql, count_params) as cur:
+                row = await cur.fetchone()
+                total = row[0] if row else 0
+            async with db.execute(items_sql, items_params) as cur:
+                rows = await cur.fetchall()
+                items = [_row_to_episode(row) for row in rows]
+        return {"items": items, "total": total, "page": page, "limit": limit}
+
+    async def get_timeline(self, project_id: str, limit: int = 100) -> list:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM episodes WHERE project_id = ? ORDER BY created_at ASC LIMIT ?",
+                (project_id, limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [_row_to_episode(row) for row in rows]
 
 
 def _row_to_episode(row) -> Episode:

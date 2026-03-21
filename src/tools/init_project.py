@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 
@@ -14,7 +15,22 @@ def slugify(name: str) -> str:
     return re.sub(r"-+", "-", s)[:64]
 
 
-def make_init_project(mcp: FastMCP, projects: ProjectsService) -> None:
+async def _do_scan(
+    repo_path: str,
+    project_id: str,
+    projects: ProjectsService,
+    extraction_queue: asyncio.Queue,
+) -> None:
+    try:
+        from src.services.scanner import scan_repo
+
+        count = await scan_repo(repo_path, project_id, projects, extraction_queue)
+        logger.info(f"scan_repo completed: {count} episodes queued for {project_id}")
+    except Exception as e:
+        logger.error(f"scan_repo failed for {project_id}: {e}", exc_info=True)
+
+
+def make_init_project(mcp: FastMCP, projects: ProjectsService, extraction_queue: asyncio.Queue) -> None:
     @mcp.tool
     async def init_project(
         name: str,
@@ -45,13 +61,17 @@ def make_init_project(mcp: FastMCP, projects: ProjectsService) -> None:
                 "description": existing.description,
             }
 
-        if scan_repo:
-            logger.warning("scan_repo=True is not yet implemented (Phase 2). Ignoring.")
-
         project = await projects.create_project(name, description, repo_path)
-        return {
+        result: dict = {
             "project_id": project.project_id,
             "status": "created",
             "name": project.name,
             "description": project.description,
         }
+
+        if scan_repo:
+            actual_path = repo_path or "."
+            asyncio.create_task(_do_scan(actual_path, project_id, projects, extraction_queue))
+            result["scan_repo_queued"] = True
+
+        return result

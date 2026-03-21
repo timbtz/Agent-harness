@@ -74,9 +74,7 @@ async def main_async() -> None:
     extraction_queue: asyncio.Queue = asyncio.Queue()
     worker_tasks = []
     for _ in range(settings.extraction_workers):
-        t = asyncio.create_task(
-            _extraction_worker(extraction_queue, knowledge, projects)
-        )
+        t = asyncio.create_task(_extraction_worker(extraction_queue, knowledge, projects))
         worker_tasks.append(t)
     logger.info(f"Started {settings.extraction_workers} extraction workers")
 
@@ -121,9 +119,7 @@ async def main_async() -> None:
     signal.signal(signal.SIGTERM, handle_shutdown)
     signal.signal(signal.SIGINT, handle_shutdown)
 
-    logger.info(
-        f"Starting Agent Harness — HTTP on {settings.uvicorn_host}:{settings.http_port}"
-    )
+    logger.info(f"Starting Agent Harness — HTTP on {settings.uvicorn_host}:{settings.http_port}")
 
     try:
         await asyncio.gather(mcp.run_async(), http_server.serve())

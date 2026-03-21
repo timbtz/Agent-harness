@@ -17,7 +17,7 @@ def register_tools(
     from src.tools.recall import make_recall
     from src.tools.remember import make_remember
 
-    make_init_project(mcp, projects)
+    make_init_project(mcp, projects, extraction_queue)
     make_remember(mcp, knowledge, projects, extraction_queue)
     make_recall(mcp, knowledge, projects)
     make_prime(mcp, knowledge, projects)

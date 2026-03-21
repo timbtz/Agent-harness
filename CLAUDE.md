@@ -83,13 +83,11 @@ agent-harness/
 │   │   ├── recall.py           # Hybrid search
 │   │   └── init_project.py     # Project creation/retrieval
 │   ├── services/
-│   │   ├── knowledge.py        # Graphiti wrapper
+│   │   ├── knowledge.py        # Graphiti wrapper (per-project cache) + get_graph_data()
 │   │   ├── briefing.py         # Briefing generation for prime()
-│   │   ├── scanner.py          # Repo structure scanning
-│   │   └── projects.py         # SQLite project metadata
+│   │   ├── projects.py         # SQLite CRUD: projects + episodes, get_insights(), get_timeline()
+│   │   └── scanner.py          # Repo scanner: reads config files + folder tree → architecture episodes
 │   └── api/routes.py           # REST endpoints for dashboard
-├── templates/
-│   └── claude_md_instructions.md
 └── tests/
 ```
 
@@ -99,7 +97,7 @@ agent-harness/
 
 ### Deployment Topology
 
-- **FalkorDB:** Docker container only — port NOT exposed externally
+- **FalkorDB:** Docker container — bound to `127.0.0.1:6379` (localhost only, not externally exposed)
 - **MCP server:** HOST process only via `uvx agent-harness` (stdio requires direct child of Claude Code)
 - **Both FastMCP (stdio) and FastAPI (HTTP :8080) run in the same process** via `asyncio.gather()`
 
@@ -131,12 +129,14 @@ Dashboard   → HTTP  → FastAPI → routes.py → (same services)
 ```
 remember() called
     ├─ SYNC: store raw episode text → status=pending → return confirmation
-    └─ ASYNC: asyncio.create_task(graphiti.add_episode(...))
+    └─ PUT: extraction_queue.put((episode_id, content, category, project_id))
+                ↓ consumed by N worker coroutines (N = EXTRACTION_WORKERS)
                   ├─ status=processing → LLM extraction (4-10 calls)
                   ├─ success → status=complete (graph nodes/edges in FalkorDB)
                   └─ failure → status=failed (raw text still searchable)
 
-Concurrency limit: asyncio.Semaphore(4)  [3-5 max concurrent extractions]
+Concurrency limit: asyncio.Queue + EXTRACTION_WORKERS workers (default 4)
+Graceful shutdown: send None sentinel per worker, await queue.join()
 Episode statuses: pending | processing | complete | failed
 ```
 
@@ -175,8 +175,9 @@ Hybrid search (cosine + BM25 + graph BFS, fused via RRF). Falls back to raw epis
 ### `init_project(name, description, scan_repo=False, repo_path=None) → dict`
 Create or retrieve project namespace. **Idempotent.**
 - `project_id` auto-generated: `"My SaaS App"` → `"my-saas-app"` (pattern `^[a-z0-9-]{1,64}$`)
-- `scan_repo=True` reads: `package.json`, `pyproject.toml`, `docker-compose.yml`, folder structure (2 levels), `README.md`, `docs/*.md`
-- Returns: `{"project_id":"...","status":"created"|"existing"}`
+- `scan_repo=True` reads (if found): `package.json`, `pyproject.toml`, `requirements.txt`, `docker-compose.yml`, `docker-compose.yaml`, `README.md`, `README.rst`, `docs/*.md` (up to 5), folder tree (2 levels deep). Each file → one `architecture` episode enqueued async. Scan only runs for **new** projects, not existing ones.
+- Returns (created): `{"project_id":"...","status":"created","name":"...","description":"...","scan_repo_queued":true}`
+- Returns (existing): `{"project_id":"...","status":"existing","name":"...","description":"..."}`
 
 ---
 
@@ -192,24 +193,33 @@ logging.basicConfig(level=logging.INFO, stream=sys.stderr, ...)
 logger = logging.getLogger(__name__)  # Use in all modules
 ```
 
-**Background tasks with semaphore:**
+**Background extraction — Queue + worker pool (in server.py):**
 ```python
-_background_tasks: set = set()
-_sem = asyncio.Semaphore(4)
+# server.py: create queue + start N workers at startup
+extraction_queue: asyncio.Queue = asyncio.Queue()
+worker_tasks = [
+    asyncio.create_task(_extraction_worker(extraction_queue, knowledge, projects))
+    for _ in range(settings.extraction_workers)
+]
 
-async def run_extraction(episode_id, content, group_id):
-    async with _sem:
+async def _extraction_worker(queue, knowledge, projects):
+    while True:
+        item = await queue.get()
+        if item is None:   # shutdown sentinel
+            queue.task_done(); return
+        episode_id, content, category, project_id = item
         try:
-            await update_status(episode_id, "processing")
-            await graphiti.add_episode(...)
-            await update_status(episode_id, "complete")
+            await projects.update_episode_status(episode_id, "processing")
+            gid = await knowledge.add_episode(episode_id, content, category, project_id)
+            await projects.update_episode_status(episode_id, "complete", gid)
         except Exception as e:
             logger.error(f"Extraction failed {episode_id}: {e}", exc_info=True)
-            await update_status(episode_id, "failed")
+            await projects.update_episode_status(episode_id, "failed")
+        finally:
+            queue.task_done()
 
-task = asyncio.create_task(run_extraction(...))
-_background_tasks.add(task)
-task.add_done_callback(_background_tasks.discard)
+# remember.py tool: just enqueue
+await extraction_queue.put((episode.episode_id, content, category, project_id))
 ```
 
 **Slugify:**
@@ -220,9 +230,17 @@ def slugify(name: str) -> str:
     return re.sub(r"-+", "-", s)[:64]
 ```
 
-**Always filter by group_id in Graphiti search:**
+**Graphiti search — correct API (graphiti-core 0.28.x):**
 ```python
-await graphiti.search(query=q, filters=SearchFilters(group_ids=[project_id]))
+# search() returns list[EntityEdge] — NOT a SearchResults object
+edges = await graphiti.search(
+    query=q,
+    group_ids=[project_id],   # direct param, NOT filters=SearchFilters(...)
+    num_results=10,           # NOT limit=
+)
+# Embedder: use OpenAIEmbedderConfig (NOT EmbedderConfig — that class doesn't exist)
+from graphiti_core.embedder import OpenAIEmbedder, OpenAIEmbedderConfig
+# SearchFilters import: graphiti_core.search.search_filters (NOT search_config)
 ```
 
 ---
@@ -234,17 +252,17 @@ await graphiti.search(query=q, filters=SearchFilters(group_ids=[project_id]))
 LLM_PROVIDER=openai              # openai | anthropic | ollama
 LLM_API_KEY=sk-...               # API key for entity extraction
 LLM_MODEL=gpt-4.1-mini           # Model for Graphiti extraction
-OPENAI_API_KEY=sk-...            # For text-embedding-3-small
+OPENAI_API_KEY=sk-...            # For text-embedding-3-small (always required)
 
 # Optional (defaults shown)
 FALKORDB_HOST=localhost
 FALKORDB_PORT=6379
-MCP_TRANSPORT=stdio              # stdio | sse
 HTTP_PORT=8080
 LOG_LEVEL=info
 SQLITE_PATH=~/.agent-harness/projects.db
 UVICORN_HOST=127.0.0.1           # Do NOT change to 0.0.0.0
 ALLOWED_ORIGINS=http://localhost:3000
+EXTRACTION_WORKERS=4             # Concurrent Graphiti extraction workers
 MCP_ENV_FILE=/absolute/path/.env # Load config from explicit path
 ```
 
@@ -255,13 +273,14 @@ MCP_ENV_FILE=/absolute/path/.env # Load config from explicit path
 ## 9. Critical Rules
 
 1. **NEVER `print()` to stdout** in MCP server code — stdout IS the JSON-RPC protocol; any non-JSON output corrupts it
-2. **NEVER add `ports:` to FalkorDB** in `docker-compose.yml` — Docker bridges `localhost:6379` automatically; external exposure is a security risk
+2. **FalkorDB ports MUST bind to `127.0.0.1` only** — use `ports: "127.0.0.1:6379:6379"` in `docker-compose.yml`; on Linux Docker does NOT auto-bridge localhost without this; never bind to `0.0.0.0`
 3. **NEVER run the MCP server in Docker** — Claude Code requires MCP servers as direct stdio child processes
 4. **ALWAYS pin FastMCP to major version** — `fastmcp>=3.0,<4.0` in `pyproject.toml`
 5. **Uvicorn MUST bind to `127.0.0.1`** — never `0.0.0.0`
 6. **`.env` MUST be in `.gitignore`** — only `.env.example` is committed
 7. **Always pass `group_ids` filter** in Graphiti searches — prevents cross-project contamination
-8. **Store `asyncio.create_task()` references** — tasks are GC'd if not referenced
+8. **Store worker task references** — keep `worker_tasks` list from `asyncio.create_task()` calls so workers aren't GC'd before shutdown
+9. **`asyncio.to_thread()` for FalkorDB data queries** — the `falkordb` Python client is synchronous; calling it directly in `async def` blocks the event loop. `check_connection()` (single `RETURN 1`) is exempt; all multi-query data methods (e.g. `get_graph_data`) must use `asyncio.to_thread()`
 
 ---
 
@@ -273,11 +292,12 @@ MCP_ENV_FILE=/absolute/path/.env # Load config from explicit path
 | `src/config.py` | All env vars via Pydantic Settings |
 | `src/models.py` | Episode (with status field), Project, SearchResult models |
 | `src/tools/prime.py` | Briefing queries → ≤400 token output |
-| `src/tools/remember.py` | Sync store + async extraction with semaphore |
+| `src/tools/remember.py` | Sync store → enqueue for async extraction |
 | `src/tools/recall.py` | Hybrid search + raw episode fallback → ≤500 token output |
 | `src/tools/init_project.py` | Idempotent project creation, optional repo scan |
-| `src/services/knowledge.py` | Graphiti wrapper: `add_episode()`, `search()`, `build_indices()` |
-| `src/services/projects.py` | SQLite CRUD for project metadata |
+| `src/services/knowledge.py` | Graphiti wrapper: `add_episode()`, `search()`, `get_graph_data()` (via `asyncio.to_thread`) |
+| `src/services/projects.py` | SQLite CRUD: projects + episodes; `get_insights()` (paginated), `get_timeline()` |
+| `src/services/scanner.py` | Repo scanner: reads config files + folder tree, enqueues `architecture` episodes |
 | `src/api/routes.py` | REST: `/api/health`, `/api/projects`, `/graph`, `/insights`, `/timeline` |
 | `docker-compose.yml` | FalkorDB only (no MCP server) |
 | `.env.example` | Config template |
@@ -317,6 +337,6 @@ uv run pytest tests/ -v        # All passing
 # Lint
 uv run ruff check src/         # Zero errors
 
-# No stdout in MCP server code
-grep -rn "print(" src/         # Must return nothing
+# No stdout in MCP server code (grep exits 1 on no match — that is the desired outcome)
+grep -rn "print(" src/ && echo "FAIL: print() found" || echo "OK: no print() calls"
 ```

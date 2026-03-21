@@ -35,9 +35,7 @@ def make_remember(
 
         project = await projects.get(project_id)
         if project is None:
-            raise ToolError(
-                f"Project '{project_id}' not found. Call init_project first."
-            )
+            raise ToolError(f"Project '{project_id}' not found. Call init_project first.")
 
         episode = await projects.create_episode(project_id, content, category)
         await extraction_queue.put((episode.episode_id, content, category, project_id))

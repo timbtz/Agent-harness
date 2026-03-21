@@ -22,12 +22,8 @@ async def generate_briefing(
 
     total_count = await projects.count_episodes(project.project_id)
 
-    decisions = await knowledge.search(
-        "key decisions architecture choices", project.project_id, limit=4
-    )
-    pitfalls = await knowledge.search(
-        "errors failures pitfalls issues problems", project.project_id, limit=3
-    )
+    decisions = await knowledge.search("key decisions architecture choices", project.project_id, limit=4)
+    pitfalls = await knowledge.search("errors failures pitfalls issues problems", project.project_id, limit=3)
 
     lines = [
         f"## Project: {project.name}",

@@ -10,9 +10,7 @@ from src.services.projects import ProjectsService
 logger = logging.getLogger(__name__)
 
 
-def make_prime(
-    mcp: FastMCP, knowledge: KnowledgeService, projects: ProjectsService
-) -> None:
+def make_prime(mcp: FastMCP, knowledge: KnowledgeService, projects: ProjectsService) -> None:
     @mcp.tool
     async def prime(project_id: str) -> str:
         """Load compressed project context at the start of every coding session.
@@ -23,8 +21,6 @@ def make_prime(
         """
         project = await projects.get(project_id)
         if project is None:
-            raise ToolError(
-                f"Project '{project_id}' not found. Call init_project first."
-            )
+            raise ToolError(f"Project '{project_id}' not found. Call init_project first.")
 
         return await generate_briefing(project, knowledge, projects)

@@ -67,9 +67,9 @@ async def startup():
     app.state.knowledge = knowledge
     app.state.projects = projects
 
-    # Attach tools to MCP (pass services via closure or global)
+    # Attach tools to MCP (pass services + extraction queue)
     from src.tools import register_tools
-    register_tools(mcp, knowledge, projects)
+    register_tools(mcp, knowledge, projects, extraction_queue)  # extraction_queue required
 
     # Register REST routes
     app.include_router(create_router(knowledge, projects), prefix="/api")
@@ -181,20 +181,21 @@ def create_router(
         return await knowledge.get_graph_data(project_id)
 
     @router.get("/projects/{project_id}/insights")
-    async def get_insights(project_id: str, page: int = 1, limit: int = 20, category: str = None):
-        project = await projects.get(project_id)
-        if not project:
-            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
-        return await knowledge.get_insights(project_id, page=page, limit=limit, category=category)
+    async def get_insights(project_id: str, page: int = 1, limit: int = 20, category: str | None = None):
+        await _require_project(project_id, projects)
+        return await projects.get_insights(project_id, page, limit, category)
 
     @router.get("/projects/{project_id}/timeline")
     async def get_timeline(project_id: str):
-        project = await projects.get(project_id)
-        if not project:
-            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
-        return await knowledge.get_timeline(project_id)
+        await _require_project(project_id, projects)
+        return await projects.get_timeline(project_id)
 
     return router
+
+
+async def _require_project(project_id: str, projects: ProjectsService):
+    if not await projects.get(project_id):
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
 ```
 
 ### Route Summary
@@ -217,11 +218,12 @@ For the Lovable dashboard (Phase 4):
 ```python
 from fastapi.middleware.cors import CORSMiddleware
 
+origins = [o.strip() for o in settings.allowed_origins.split(",")]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.allowed_origins],   # e.g., "http://localhost:3000"
-    allow_credentials=False,
-    allow_methods=["GET"],       # Read-only dashboard
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 ```
@@ -250,15 +252,9 @@ async def main_async():
                             loop="asyncio", workers=1, log_config=None)
     http_server = uvicorn.Server(config)
 
-    # Background task registry (prevent GC)
-    _background_tasks: set = set()
-
     # Shutdown handler
-    shutdown_event = asyncio.Event()
-
     def handle_shutdown(sig, frame):
         logger.info(f"Received {signal.Signals(sig).name}, initiating graceful shutdown...")
-        shutdown_event.set()
         http_server.should_exit = True   # Signal Uvicorn to stop
 
     signal.signal(signal.SIGTERM, handle_shutdown)
@@ -270,13 +266,16 @@ async def main_async():
             http_server.serve(),
         )
     finally:
-        # Await background extraction tasks (30s timeout)
-        if _background_tasks:
-            logger.info(f"Waiting for {len(_background_tasks)} background tasks...")
-            await asyncio.wait_for(
-                asyncio.gather(*_background_tasks, return_exceptions=True),
-                timeout=30.0,
-            )
+        # Drain extraction queue — send None sentinel per worker, then wait
+        logger.info("Draining extraction queue (30s timeout)...")
+        for _ in range(settings.extraction_workers):
+            await extraction_queue.put(None)
+        try:
+            await asyncio.wait_for(extraction_queue.join(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.warning("Extraction queue drain timed out after 30s")
+        for t in worker_tasks:
+            t.cancel()
         logger.info("Shutdown complete")
 ```
 
@@ -326,7 +325,7 @@ async def startup():
 
     projects = await ProjectsService.create(settings)  # 5. Init project service
 
-    register_tools(mcp, knowledge, projects)  # 6. Register MCP tools
+    register_tools(mcp, knowledge, projects, extraction_queue)  # 6. Register MCP tools
     app.include_router(...)                   # 7. Register REST routes
 
     logger.info("Startup complete — ready for connections")

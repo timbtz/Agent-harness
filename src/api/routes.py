@@ -45,12 +45,12 @@ def create_router(knowledge: KnowledgeService, projects: ProjectsService) -> API
         category: str | None = None,
     ):
         await _require_project(project_id, projects)
-        return await knowledge.get_insights(project_id, page, limit, category)
+        return await projects.get_insights(project_id, page, limit, category)
 
     @router.get("/projects/{project_id}/timeline")
     async def get_timeline(project_id: str):
         await _require_project(project_id, projects)
-        return await knowledge.get_timeline(project_id)
+        return await projects.get_timeline(project_id)
 
     return router
 
