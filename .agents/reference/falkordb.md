@@ -367,6 +367,28 @@ async def get_graph_data(self, project_id: str) -> dict:
 
 **Exception:** `check_connection()` (health check) calls the client directly in `async def` — acceptable for a single brief `RETURN 1` query, not for multi-query data fetches.
 
+### Local import pattern — mock target
+
+`KnowledgeService` imports `FalkorDB` **inside function bodies** (not at module level):
+
+```python
+# Inside check_connection() and _query() helpers:
+from falkordb import FalkorDB   # local import inside the function
+db = FalkorDB(host=..., port=...)
+```
+
+This means when mocking in tests, you must patch at the **source module**, not the importing module:
+
+```python
+# CORRECT — patches the class where it is defined
+with patch("falkordb.FalkorDB", return_value=mock_db):
+    ...
+
+# WRONG — src.services.knowledge never holds a module-level reference
+with patch("src.services.knowledge.FalkorDB", ...):  # AttributeError
+    ...
+```
+
 ---
 
 ## Troubleshooting

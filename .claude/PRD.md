@@ -810,23 +810,23 @@ A developer can install the system in under 5 minutes and experience measurable 
 ### Phase 3: Polish + Open Source Launch (Week 3–4)
 **Goal:** Production-ready open-source release on PyPI.
 
-- ✅ README with demo GIF, architecture diagram, quick start
+- ✅ README with architecture diagram, quick start, full tool reference
 - ✅ Example CLAUDE.md instructions
-- ✅ Automated tests
-- ✅ Error recovery and performance optimization
-- ✅ GitHub setup (issues, contributing guide, CI)
-- ✅ **PyPI publication** (`agent-harness` package)
+- ✅ Automated test suite (122 tests: MCP tools, services, REST routes, knowledge service)
 - ✅ `pyproject.toml` console script entry point: `agent-harness = "src.server:main"`
-- ✅ Verification: `uvx agent-harness --health-check` CLI command
+- ⬜ GitHub setup (issues, contributing guide, CI/CD workflows)
+- ⬜ **PyPI publication** (`agent-harness` package, `uvx agent-harness` install path)
 
 **Validation:** New user goes from zero to working knowledge graph in under 5 minutes via `uvx agent-harness`.
 
-### Phase 4: Dashboard Integration (Week 4–5)
-**Goal:** Lovable dashboard connected to REST API.
+### Phase 4: Dashboard + PyPI (Week 4–5)
+**Goal:** Published PyPI package + Lovable dashboard connected to REST API.
 
-- ✅ Lovable-built dashboard consuming REST endpoints
-- ✅ Knowledge graph visualization
-- ✅ Project overview, timeline, category filtering
+- ⬜ PyPI publish pipeline (GitHub Actions, OIDC trusted publisher)
+- ⬜ Lovable-built dashboard consuming REST endpoints
+- ⬜ Knowledge graph visualization
+- ⬜ Project overview, timeline, category filtering
+- ⬜ End-to-end integration tests (live FalkorDB + real LLM API)
 
 ---
 

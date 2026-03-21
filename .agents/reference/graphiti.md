@@ -393,7 +393,7 @@ async def hybrid_recall(query: str, project_id: str) -> list[dict]:
 |-------|-------|-----|
 | `ConnectionError` to FalkorDB | FalkorDB not running | `docker compose up -d`, check `docker compose ps` |
 | `AuthenticationError` | Bad LLM API key | Check `LLM_API_KEY` in `.env` |
-| `RateLimitError` | Too many concurrent extractions | Reduce semaphore limit, or switch to cheaper model |
+| `RateLimitError` | Too many concurrent extractions | Reduce `EXTRACTION_WORKERS` count, or switch to cheaper model |
 | Index not found | `build_indices_and_constraints()` not called | Always call at startup |
 | Cross-project contamination | Missing `group_ids` filter | Always pass `group_ids=[project_id]` directly to `search()` — NOT via `SearchFilters` |
 

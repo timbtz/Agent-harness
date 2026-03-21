@@ -437,6 +437,44 @@ async def recall(project_id: str, query: str) -> str:
 
 ---
 
+## Testing Tools (In-Process)
+
+FastMCP v3 supports in-process testing without spawning a subprocess.
+
+### Calling tools in tests
+
+```python
+import asyncio
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+
+# Call a registered tool
+result = await mcp.call_tool("prime", {"project_id": "my-project"})
+# result.content[0].text  → str output
+# result.structured_content → dict output (if tool returns dict)
+
+# ToolError is re-raised as an exception from call_tool
+with pytest.raises(ToolError):
+    await mcp.call_tool("prime", {"project_id": "nonexistent"})
+```
+
+### Inspecting tool schemas
+
+```python
+tools = await mcp.list_tools()
+# Returns list of FunctionTool objects
+
+tool = next(t for t in tools if t.name == "remember")
+
+# Access JSON schema via .parameters (NOT .inputSchema — that attribute does not exist in v3)
+params = tool.parameters.get("properties", {})   # dict of param name → schema
+required = tool.parameters.get("required", [])   # list of required param names
+```
+
+**Important:** FastMCP v3 uses `tool.parameters` (snake_case dict), not `tool.inputSchema`. Using `inputSchema` raises `AttributeError`.
+
+---
+
 ## Version Compatibility Notes
 
 | Version | Status | Notes |

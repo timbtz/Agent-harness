@@ -281,6 +281,7 @@ MCP_ENV_FILE=/absolute/path/.env # Load config from explicit path
 7. **Always pass `group_ids` filter** in Graphiti searches — prevents cross-project contamination
 8. **Store worker task references** — keep `worker_tasks` list from `asyncio.create_task()` calls so workers aren't GC'd before shutdown
 9. **`asyncio.to_thread()` for FalkorDB data queries** — the `falkordb` Python client is synchronous; calling it directly in `async def` blocks the event loop. `check_connection()` (single `RETURN 1`) is exempt; all multi-query data methods (e.g. `get_graph_data`) must use `asyncio.to_thread()`
+10. **`FalkorDB` is imported inside function bodies** — `KnowledgeService` uses local imports (`from falkordb import FalkorDB` inside the function). When mocking in tests, patch `"falkordb.FalkorDB"` (source module), not `"src.services.knowledge.FalkorDB"` (which has no module-level binding and raises `AttributeError`)
 
 ---
 
