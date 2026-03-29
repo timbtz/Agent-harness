@@ -376,3 +376,57 @@ async def test_delete_episode_cannot_delete_across_projects(tmp_path):
     # Original episode still exists
     remaining = await svc.get_recent_episodes(p1.project_id, limit=10)
     assert any(e.episode_id == ep.episode_id for e in remaining)
+
+
+# ---------------------------------------------------------------------------
+# delete_project
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_project_returns_true(tmp_path):
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    await svc.create_project("My Project", "desc")
+
+    result = await svc.delete_project("my-project")
+
+    assert result is True
+
+
+async def test_delete_project_removes_from_list(tmp_path):
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    await svc.create_project("My Project", "desc")
+
+    await svc.delete_project("my-project")
+
+    assert await svc.get("my-project") is None
+    assert await svc.count() == 0
+
+
+async def test_delete_project_cascades_episodes(tmp_path):
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    project = await svc.create_project("My Project", "desc")
+    await svc.create_episode(project.project_id, "Episode content to be cascade deleted", "decision")
+    await svc.create_episode(project.project_id, "Another episode content cascade delete", "insight")
+
+    await svc.delete_project(project.project_id)
+
+    assert await svc.count_episodes(project.project_id) == 0
+
+
+async def test_delete_project_not_found_returns_false(tmp_path):
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+
+    result = await svc.delete_project("nonexistent-project")
+
+    assert result is False
+
+
+async def test_delete_project_does_not_affect_other_projects(tmp_path):
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    await svc.create_project("Project A", "desc")
+    await svc.create_project("Project B", "desc")
+
+    await svc.delete_project("project-a")
+
+    assert await svc.get("project-b") is not None
+    assert await svc.count() == 1

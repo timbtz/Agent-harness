@@ -306,3 +306,165 @@ async def test_delete_episode_project_not_found(tmp_path):
         response = await client.delete("/api/projects/nonexistent-proj/episodes/ep_abc")
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/projects/{project_id}
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_project_success(tmp_path):
+    """DELETE /api/projects/{id} returns 200 with deleted=True."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    project = await projects.create_project("Test Project", "desc")
+    knowledge = _make_knowledge()
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.delete(f"/api/projects/{project.project_id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["deleted"] is True
+    assert data["project_id"] == project.project_id
+    assert "note" in data
+
+
+async def test_delete_project_also_removes_episodes(tmp_path):
+    """DELETE /api/projects/{id} cascades to episodes."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    project = await projects.create_project("Test Project", "desc")
+    await projects.create_episode(project.project_id, "Some content for cascade test here", "decision")
+    knowledge = _make_knowledge()
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        await client.delete(f"/api/projects/{project.project_id}")
+
+    assert await projects.get(project.project_id) is None
+    assert await projects.count_episodes(project.project_id) == 0
+
+
+async def test_delete_project_not_found(tmp_path):
+    """DELETE /api/projects/missing returns 404."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    knowledge = _make_knowledge()
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.delete("/api/projects/nonexistent-project")
+
+    assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /api/projects/{project_id}/search
+# ---------------------------------------------------------------------------
+
+
+async def test_search_returns_results(tmp_path):
+    """POST /search returns 200 with graph results from KnowledgeService."""
+    from datetime import datetime, timezone
+    from src.models import SearchResult
+
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    await projects.create_project("Test Project", "desc")
+    knowledge = _make_knowledge()
+    knowledge.search = AsyncMock(
+        return_value=[
+            SearchResult(
+                content="Redis chosen for caching",
+                score=1.0,
+                source="graph",
+                entity_name="Redis",
+                created_at=datetime.now(timezone.utc),
+            )
+        ]
+    )
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/projects/test-project/search",
+            json={"query": "why did we choose Redis"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["query"] == "why did we choose Redis"
+    assert len(data["results"]) == 1
+    assert data["results"][0]["source"] == "graph"
+    assert data["total"] == 1
+
+
+async def test_search_fallback_includes_raw_episodes(tmp_path):
+    """POST /search falls back to raw episodes when graph returns nothing."""
+    from unittest.mock import AsyncMock
+
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    await projects.create_project("Test Project", "desc")
+    await projects.create_episode("test-project", "PostgreSQL was chosen for ACID compliance needs", "decision")
+    knowledge = _make_knowledge()
+    knowledge.search = AsyncMock(return_value=[])  # no graph results
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/projects/test-project/search",
+            json={"query": "PostgreSQL database choice"},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] >= 1
+    raw = [r for r in data["results"] if r["source"] == "raw_episode"]
+    assert len(raw) >= 1
+    assert "PostgreSQL" in raw[0]["content"]
+
+
+async def test_search_project_not_found(tmp_path):
+    """POST /search returns 404 when project does not exist."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    knowledge = _make_knowledge()
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/projects/no-such-project/search",
+            json={"query": "anything"},
+        )
+
+    assert response.status_code == 404
+
+
+async def test_search_query_too_short(tmp_path):
+    """POST /search returns 422 when query is shorter than 3 characters."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    await projects.create_project("Test Project", "desc")
+    knowledge = _make_knowledge()
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/projects/test-project/search",
+            json={"query": "ab"},
+        )
+
+    assert response.status_code == 422
+
+
+async def test_search_respects_limit(tmp_path):
+    """POST /search passes limit to KnowledgeService.search."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    await projects.create_project("Test Project", "desc")
+    knowledge = _make_knowledge()
+    knowledge.search = AsyncMock(return_value=[])
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        await client.post(
+            "/api/projects/test-project/search",
+            json={"query": "some query here", "limit": 5},
+        )
+
+    knowledge.search.assert_awaited_once_with("some query here", "test-project", limit=5)

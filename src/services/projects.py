@@ -193,6 +193,14 @@ class ProjectsService:
                 rows = await cursor.fetchall()
                 return [_row_to_episode(row) for row in rows]
 
+    async def delete_project(self, project_id: str) -> bool:
+        """Delete a project and all its episodes. Returns True if deleted, False if not found."""
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("DELETE FROM episodes WHERE project_id = ?", (project_id,))
+            async with db.execute("DELETE FROM projects WHERE project_id = ?", (project_id,)) as cursor:
+                await db.commit()
+                return cursor.rowcount > 0
+
     async def delete_episode(self, project_id: str, episode_id: str) -> bool:
         """Delete an episode by ID. Returns True if deleted, False if not found.
 
