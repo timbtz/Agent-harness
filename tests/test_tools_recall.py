@@ -185,3 +185,18 @@ async def test_recall_passes_project_id_to_knowledge_search(tmp_path):
     knowledge.search.assert_called_once()
     call_args = knowledge.search.call_args
     assert "test-project" in call_args.args or "test-project" in call_args.kwargs.values()
+
+
+async def test_recall_fallback_includes_failed_episodes(tmp_path):
+    """Failed episodes (from extraction errors) must appear in the keyword fallback."""
+    mcp, projects, knowledge = await _setup(tmp_path, search_results=[])
+
+    ep = await projects.create_episode("test-project", "We chose Redis for caching", "architecture")
+    await projects.update_episode_status(ep.episode_id, "failed")
+
+    result = await mcp.call_tool("recall", {
+        "project_id": "test-project",
+        "query": "Redis caching",
+    })
+
+    assert "From recent unprocessed episodes:" in result.content[0].text

@@ -1,6 +1,8 @@
 """Tests for briefing generation (src/services/briefing.py)."""
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
+from src.models import SearchResult
 from src.services.briefing import generate_briefing
 from src.services.projects import ProjectsService
 
@@ -129,3 +131,26 @@ async def test_briefing_calls_knowledge_search_when_episodes_exist(tmp_path):
     await generate_briefing(project, knowledge, projects)
 
     assert knowledge.search.call_count == 2
+
+
+async def test_briefing_key_decisions_shows_fact_content(tmp_path):
+    """Key Decisions section shows fact content, not just the relationship type name."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    project = await projects.create_project("Test Project", "desc")
+    await projects.create_episode(project.project_id, "Some decision was captured here", "decision")
+
+    graph_result = SearchResult(
+        content="We migrated from PostgreSQL to SQLite",
+        score=1.0,
+        source="graph",
+        entity_name="MIGRATED_AWAY_TO",
+        created_at=datetime.now(timezone.utc),
+    )
+    knowledge = _make_knowledge(search_results=[graph_result])
+
+    result = await generate_briefing(project, knowledge, projects)
+
+    assert "We migrated from PostgreSQL to SQLite" in result
+    # The relationship type may appear as a label prefix, but the fact content must also be present
+    # The line must NOT consist solely of the edge type name with no fact appended
+    assert "MIGRATED_AWAY_TO: We migrated from PostgreSQL to SQLite" in result

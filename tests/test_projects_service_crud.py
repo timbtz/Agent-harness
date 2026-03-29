@@ -252,3 +252,26 @@ async def test_get_existing_project_episode_count(tmp_path):
 
     assert project is not None
     assert project.episode_count == 2
+
+
+async def test_get_episodes_for_fallback_includes_failed(tmp_path):
+    """get_episodes_for_fallback returns pending+processing+failed but NOT complete."""
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    await svc.create_project("Test Project", "desc")
+
+    ep1 = await svc.create_episode("test-project", "Episode one content here to record", "decision")
+    ep2 = await svc.create_episode("test-project", "Episode two content here to record", "insight")
+    ep3 = await svc.create_episode("test-project", "Episode three content here to record", "error")
+
+    await svc.update_episode_status(ep1.episode_id, "complete")
+    await svc.update_episode_status(ep2.episode_id, "failed")
+    # ep3 stays pending
+
+    results = await svc.get_episodes_for_fallback("test-project")
+
+    returned_ids = {ep.episode_id for ep in results}
+    assert ep1.episode_id not in returned_ids  # complete — excluded
+    assert ep2.episode_id in returned_ids      # failed — included
+    assert ep3.episode_id in returned_ids      # pending — included
+    assert len(results) == 2
+    assert {"failed", "pending"} == {ep.status for ep in results}

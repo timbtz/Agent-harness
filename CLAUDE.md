@@ -111,7 +111,7 @@ Dashboard   → HTTP  → FastAPI → routes.py → (same services)
 
 1. **Graphiti as Python library** — imported directly, no second service
 2. **Async extraction** — `remember()` stores raw episode sync; Graphiti entity extraction runs async
-3. **Namespace isolation** — each project = its own FalkorDB graph via Graphiti `group_id = project_id`
+3. **Namespace isolation** — each project = its own FalkorDB graph; `_graphiti_group_id(project_id)` converts hyphens to underscores before passing to Graphiti (RediSearch treats `-` as NOT operator); FalkorDB graph name stays hyphenated
 4. **SQLite for project metadata** — stores name, description, created_at, repo_path
 5. **Deterministic slugs** — `project_id` always reconstructable: `"My App"` → `"my-app"`
 
@@ -148,11 +148,22 @@ Episode statuses: pending | processing | complete | failed
 First call at session start. Returns compressed project briefing (≤400 tokens).
 ```
 ## Project: [Name]
-**Stack:** Next.js, Supabase  |  **Status:** 23 insights, 2 pitfalls
-### Key Decisions        → decision + architecture entities
-### Known Pitfalls       → error + insight entities (negative outcomes)
-### Last Session         → most recent 3-5 episodes
+**Stack:** Next.js, Supabase
+**Status:** 23 insights stored
+
+### Key Decisions
+- MIGRATED_AWAY_TO: We migrated from PostgreSQL to SQLite for simplicity
+- AUTH_USES: JWT chosen over sessions — Supabase RLS incompatible with service role
+
+### Known Pitfalls
+- API_INCOMPATIBLE_WITH: Supabase Edge Functions timeout after 10s on large queries
+
+### Last Session
+- [decision] Chose pgBouncer for connection pooling
+- [error] Stripe webhook verification fails in dev without ngrok
 ```
+Key Decisions and Known Pitfalls show `RelationshipType: fact sentence` (both the graph edge label and the human-readable fact). If no graph results exist yet, these sections are omitted.
+
 Error: `{"error":"project_not_found","message":"Project 'x' not found. Call init_project first."}`
 
 ### `remember(project_id, content, category) → dict`
@@ -168,7 +179,7 @@ Errors: `invalid_category`, `content_too_short`, `project_not_found`
 **Category guide:** `decision` = choice with rationale · `insight` = API/library behavior · `error` = tried+failed · `goal` = requirement/constraint · `architecture` = system structure
 
 ### `recall(project_id, query) → str`
-Hybrid search (cosine + BM25 + graph BFS, fused via RRF). Falls back to raw episodes if extraction pending.
+Hybrid search (cosine + BM25 + graph BFS, fused via RRF). Falls back to keyword search over raw episodes when extraction is `pending`, `processing`, or `failed` — knowledge is never silently lost.
 - `query`: 3–500 chars, natural language or keywords
 - Output capped at 300–500 tokens · P95 latency ~300ms (no LLM calls)
 
@@ -230,13 +241,21 @@ def slugify(name: str) -> str:
     return re.sub(r"-+", "-", s)[:64]
 ```
 
+**Graphiti group_id sanitization — REQUIRED:**
+```python
+def _graphiti_group_id(project_id: str) -> str:
+    """RediSearch treats hyphens as NOT operators. Replace with underscores."""
+    return project_id.replace("-", "_")
+```
+This is a module-level function in `knowledge.py`. Every call to Graphiti that takes `group_id` or `group_ids` MUST use the sanitized value. The FalkorDB `database=` name keeps the original hyphenated `project_id`.
+
 **Graphiti search — correct API (graphiti-core 0.28.x):**
 ```python
 # search() returns list[EntityEdge] — NOT a SearchResults object
 edges = await graphiti.search(
     query=q,
-    group_ids=[project_id],   # direct param, NOT filters=SearchFilters(...)
-    num_results=10,           # NOT limit=
+    group_ids=[_graphiti_group_id(project_id)],  # sanitized — hyphens → underscores
+    num_results=10,                               # NOT limit=
 )
 # Embedder: use OpenAIEmbedderConfig (NOT EmbedderConfig — that class doesn't exist)
 from graphiti_core.embedder import OpenAIEmbedder, OpenAIEmbedderConfig
@@ -282,6 +301,7 @@ MCP_ENV_FILE=/absolute/path/.env # Load config from explicit path
 8. **Store worker task references** — keep `worker_tasks` list from `asyncio.create_task()` calls so workers aren't GC'd before shutdown
 9. **`asyncio.to_thread()` for FalkorDB data queries** — the `falkordb` Python client is synchronous; calling it directly in `async def` blocks the event loop. `check_connection()` (single `RETURN 1`) is exempt; all multi-query data methods (e.g. `get_graph_data`) must use `asyncio.to_thread()`
 10. **`FalkorDB` is imported inside function bodies** — `KnowledgeService` uses local imports (`from falkordb import FalkorDB` inside the function). When mocking in tests, patch `"falkordb.FalkorDB"` (source module), not `"src.services.knowledge.FalkorDB"` (which has no module-level binding and raises `AttributeError`)
+11. **`graphiti_core` calls `load_dotenv()` at import time** — importing any `graphiti_core` module loads the project `.env` into `os.environ`. Tests that assert on `Settings()` defaults must use `Settings(_env_file=None)` + `monkeypatch.delenv(var, raising=False)` for each env var being tested, or the `.env` values will override the expected defaults
 
 ---
 
@@ -296,8 +316,8 @@ MCP_ENV_FILE=/absolute/path/.env # Load config from explicit path
 | `src/tools/remember.py` | Sync store → enqueue for async extraction |
 | `src/tools/recall.py` | Hybrid search + raw episode fallback → ≤500 token output |
 | `src/tools/init_project.py` | Idempotent project creation, optional repo scan |
-| `src/services/knowledge.py` | Graphiti wrapper: `add_episode()`, `search()`, `get_graph_data()` (via `asyncio.to_thread`) |
-| `src/services/projects.py` | SQLite CRUD: projects + episodes; `get_insights()` (paginated), `get_timeline()` |
+| `src/services/knowledge.py` | Graphiti wrapper: `_graphiti_group_id()` sanitizer, `add_episode()`, `search()`, `get_graph_data()` (via `asyncio.to_thread`) |
+| `src/services/projects.py` | SQLite CRUD: projects + episodes; `get_episodes_for_fallback()` (pending+processing+failed), `get_insights()` (paginated), `get_timeline()` |
 | `src/services/scanner.py` | Repo scanner: reads config files + folder tree, enqueues `architecture` episodes |
 | `src/api/routes.py` | REST: `/api/health`, `/api/projects`, `/graph`, `/insights`, `/timeline` |
 | `docker-compose.yml` | FalkorDB only (no MCP server) |

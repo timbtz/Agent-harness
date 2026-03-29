@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.models import SearchResult
-from src.services.knowledge import KnowledgeService
+from src.services.knowledge import KnowledgeService, _graphiti_group_id
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +170,49 @@ async def test_get_graph_data_returns_empty_on_error(svc):
         data = await svc.get_graph_data("my-project")
 
     assert data == {"nodes": [], "edges": []}
+
+
+# ---------------------------------------------------------------------------
+# _graphiti_group_id
+# ---------------------------------------------------------------------------
+
+
+def test_graphiti_group_id_replaces_hyphens():
+    assert _graphiti_group_id("my-saas-app") == "my_saas_app"
+
+
+def test_graphiti_group_id_no_hyphens_unchanged():
+    assert _graphiti_group_id("testproject") == "testproject"
+
+
+def test_graphiti_group_id_multiple_hyphens():
+    assert _graphiti_group_id("a-b-c-d") == "a_b_c_d"
+
+
+async def test_add_episode_uses_sanitized_group_id(svc):
+    """add_episode passes sanitized group_id (underscores) to Graphiti."""
+    mock_graphiti = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.episode.uuid = "uuid-xyz"
+    mock_graphiti.add_episode = AsyncMock(return_value=mock_result)
+
+    with patch.object(svc, "get_graphiti", return_value=mock_graphiti):
+        await svc.add_episode("ep_x", "some content", "decision", "my-project")
+
+    call_kwargs = mock_graphiti.add_episode.call_args.kwargs
+    assert call_kwargs["group_id"] == "my_project"
+
+
+async def test_search_uses_sanitized_group_ids(svc):
+    """search() passes sanitized group_ids (underscores) to Graphiti."""
+    mock_graphiti = AsyncMock()
+    mock_graphiti.search = AsyncMock(return_value=[])
+
+    with patch.object(svc, "get_graphiti", return_value=mock_graphiti):
+        await svc.search("some query", "my-project", limit=5)
+
+    call_kwargs = mock_graphiti.search.call_args.kwargs
+    assert call_kwargs["group_ids"] == ["my_project"]
 
 
 async def test_get_graph_data_structure(svc):

@@ -35,15 +35,15 @@ async def generate_briefing(
     if decisions:
         lines.append("### Key Decisions")
         for r in decisions[:4]:
-            label = r.entity_name or r.content[:100]
-            lines.append(f"- {label[:100]}")
+            label = r.entity_name or ""
+            lines.append(f"- {label + ': ' if label else ''}{r.content[:100]}")
         lines.append("")
 
     if pitfalls:
         lines.append("### Known Pitfalls")
         for r in pitfalls[:3]:
-            label = r.entity_name or r.content[:100]
-            lines.append(f"- {label[:100]}")
+            label = r.entity_name or ""
+            lines.append(f"- {label + ': ' if label else ''}{r.content[:100]}")
         lines.append("")
 
     lines.append("### Last Session")

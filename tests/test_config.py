@@ -2,8 +2,13 @@
 from src.config import Settings
 
 
-def test_settings_defaults():
-    s = Settings()
+def test_settings_defaults(monkeypatch):
+    # graphiti_core calls load_dotenv() at import time, leaking .env into os.environ.
+    # Unset the vars we're testing so Settings() reads its built-in defaults.
+    for var in ("HTTP_PORT", "FALKORDB_HOST", "FALKORDB_PORT", "UVICORN_HOST",
+                "EXTRACTION_WORKERS", "LLM_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    s = Settings(_env_file=None)
     assert s.falkordb_host == "localhost"
     assert s.falkordb_port == 6379
     assert s.http_port == 8080

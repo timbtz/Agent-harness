@@ -14,6 +14,16 @@ from src.models import SearchResult
 logger = logging.getLogger(__name__)
 
 
+def _graphiti_group_id(project_id: str) -> str:
+    """Sanitize project_id for use as Graphiti group_id.
+
+    RediSearch treats hyphens as NOT operators in query strings.
+    Replace with underscores which have no special meaning in RediSearch.
+    The FalkorDB graph name (database=) keeps the original hyphenated project_id.
+    """
+    return project_id.replace("-", "_")
+
+
 class KnowledgeService:
     def __init__(self, settings, llm_client, embedder):
         self._settings = settings
@@ -109,7 +119,7 @@ class KnowledgeService:
             source=EpisodeType.text,
             source_description=f"Agent knowledge capture — category: {category}",
             reference_time=datetime.now(timezone.utc),
-            group_id=project_id,
+            group_id=_graphiti_group_id(project_id),
         )
         return result.episode.uuid
 
@@ -119,7 +129,7 @@ class KnowledgeService:
             # search() returns list[EntityEdge]
             edges = await g.search(
                 query=query,
-                group_ids=[project_id],
+                group_ids=[_graphiti_group_id(project_id)],
                 num_results=limit,
             )
         except Exception as e:
@@ -151,14 +161,14 @@ class KnowledgeService:
             g = db.select_graph(project_id)
             nodes_result = g.query(
                 "MATCH (n:Entity) WHERE n.group_id = $gid RETURN n.uuid, n.name, n.summary",
-                params={"gid": project_id},
+                params={"gid": _graphiti_group_id(project_id)},
             )
             nodes = [{"id": row[0], "name": row[1], "summary": row[2]} for row in nodes_result.result_set if row[0]]
             edges_result = g.query(
                 "MATCH (a:Entity)-[r]->(b:Entity) "
                 "WHERE r.group_id = $gid AND r.invalid_at IS NULL "
                 "RETURN a.uuid, b.uuid, r.fact, type(r)",
-                params={"gid": project_id},
+                params={"gid": _graphiti_group_id(project_id)},
             )
             edges = [
                 {"source": row[0], "target": row[1], "fact": row[2], "type": row[3]}

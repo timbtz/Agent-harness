@@ -29,8 +29,8 @@ def make_recall(mcp: FastMCP, knowledge: KnowledgeService, projects: ProjectsSer
         # Primary: graph search
         graph_results = await knowledge.search(query, project_id, limit=8)
 
-        # Fallback: search raw pending/processing episodes
-        raw_episodes = await projects.get_pending_episodes(project_id)
+        # Fallback: search raw pending/processing/failed episodes
+        raw_episodes = await projects.get_episodes_for_fallback(project_id)
         query_words = set(query.lower().split())
         raw_matches = [ep for ep in raw_episodes if any(w in ep.content.lower() for w in query_words)][:3]
 

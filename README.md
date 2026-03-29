@@ -178,7 +178,7 @@ Search the knowledge graph. No LLM calls during retrieval — P95 latency ~300ms
 | `project_id` | str | `^[a-z0-9-]{1,64}$` |
 | `query` | str | 3–500 chars, natural language or keywords |
 
-Output capped at 300–500 tokens. Falls back to raw episode search if Graphiti extraction is still pending.
+Output capped at 300–500 tokens. Falls back to raw episode keyword search when Graphiti extraction is still pending, processing, or has failed — so knowledge is never silently lost.
 
 ---
 
@@ -258,7 +258,7 @@ remember() called
 
 ### Project Isolation
 
-Each project has its own FalkorDB graph via Graphiti `group_id = project_id`. Cross-project contamination is prevented at the search layer.
+Each project has its own FalkorDB graph. `KnowledgeService` translates `project_id` to a Graphiti `group_id` by replacing hyphens with underscores (`my-app` → `my_app`) — required because RediSearch (FalkorDB's full-text engine) treats hyphens as NOT operators in query strings. The FalkorDB graph name itself keeps the original hyphenated `project_id`. Cross-project contamination is prevented at the search layer by always filtering on `group_id`.
 
 ---
 
@@ -285,7 +285,7 @@ uv run ruff check src/
 
 ### Test Coverage
 
-The test suite (122 tests) covers all components without requiring live services:
+The test suite (130 tests) covers all components without requiring live services:
 - All 4 MCP tool handlers (validation, success/error paths, queue behavior)
 - ProjectsService CRUD (SQLite with real temp databases)
 - KnowledgeService (mocked Graphiti and FalkorDB)

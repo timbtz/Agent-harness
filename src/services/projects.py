@@ -167,6 +167,17 @@ class ProjectsService:
                 rows = await cursor.fetchall()
                 return [_row_to_episode(row) for row in rows]
 
+    async def get_episodes_for_fallback(self, project_id: str) -> list[Episode]:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM episodes WHERE project_id = ? AND status IN ('pending', 'processing', 'failed') "
+                "ORDER BY created_at DESC",
+                (project_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [_row_to_episode(row) for row in rows]
+
     async def get_recent_episodes(self, project_id: str, limit: int = 5) -> list[Episode]:
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
