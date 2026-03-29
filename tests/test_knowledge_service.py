@@ -215,6 +215,32 @@ async def test_search_uses_sanitized_group_ids(svc):
     assert call_kwargs["group_ids"] == ["my_project"]
 
 
+async def test_search_maps_invalid_at_from_edge(svc):
+    """SearchResult.invalid_at is populated from edge.invalid_at (None for valid edges)."""
+    from datetime import datetime, timezone
+
+    superseded_edge = MagicMock()
+    superseded_edge.fact = "Old fact that was superseded"
+    superseded_edge.name = "OLD_FACT"
+    superseded_edge.created_at = None
+    superseded_edge.invalid_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    valid_edge = MagicMock()
+    valid_edge.fact = "Current valid fact"
+    valid_edge.name = "CURRENT_FACT"
+    valid_edge.created_at = None
+    valid_edge.invalid_at = None
+
+    mock_graphiti = AsyncMock()
+    mock_graphiti.search = AsyncMock(return_value=[superseded_edge, valid_edge])
+
+    with patch.object(svc, "get_graphiti", return_value=mock_graphiti):
+        results = await svc.search("query", "my-project", limit=10)
+
+    assert results[0].invalid_at is not None   # superseded
+    assert results[1].invalid_at is None        # valid
+
+
 async def test_get_graph_data_structure(svc):
     """Returns dict with 'nodes' and 'edges' keys on success."""
     mock_nodes_result = MagicMock()

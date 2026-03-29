@@ -32,3 +32,4 @@ class SearchResult(BaseModel):
     source: Literal["graph", "raw_episode"]
     entity_name: str | None = None
     created_at: datetime | None = None
+    invalid_at: datetime | None = None

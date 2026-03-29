@@ -178,6 +178,35 @@ class ProjectsService:
                 rows = await cursor.fetchall()
                 return [_row_to_episode(row) for row in rows]
 
+    async def get_all_orphaned_episodes(self) -> list[Episode]:
+        """Return all pending/processing episodes across ALL projects.
+
+        Called at startup to re-queue episodes that were interrupted by a
+        server restart. Returns oldest first (ASC) so they re-extract in
+        original order.
+        """
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM episodes WHERE status IN ('pending', 'processing') ORDER BY created_at ASC",
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [_row_to_episode(row) for row in rows]
+
+    async def delete_episode(self, project_id: str, episode_id: str) -> bool:
+        """Delete an episode by ID. Returns True if deleted, False if not found.
+
+        Note: Only deletes the SQLite record. If the episode was already extracted
+        into the Graphiti knowledge graph, those entities may persist in FalkorDB.
+        """
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "DELETE FROM episodes WHERE episode_id = ? AND project_id = ?",
+                (episode_id, project_id),
+            ) as cursor:
+                await db.commit()
+                return cursor.rowcount > 0
+
     async def get_recent_episodes(self, project_id: str, limit: int = 5) -> list[Episode]:
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row

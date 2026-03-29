@@ -1,6 +1,6 @@
 """Tests for MCP tool registration (src/tools/__init__.py).
 
-Verifies all 4 tools are registered with the correct names and parameter schemas.
+Verifies all 5 tools are registered with the correct names and parameter schemas.
 asyncio_mode=auto: no @pytest.mark.asyncio needed.
 """
 import asyncio
@@ -44,16 +44,16 @@ async def registered_mcp(tmp_path, mock_knowledge):
 
 
 async def test_all_tools_registered(registered_mcp):
-    """All 4 expected MCP tools are registered."""
+    """All 5 expected MCP tools are registered."""
     tools = await registered_mcp.list_tools()
     tool_names = {t.name for t in tools}
-    assert tool_names == {"prime", "remember", "recall", "init_project"}
+    assert tool_names == {"prime", "remember", "recall", "init_project", "forget"}
 
 
 async def test_tool_count(registered_mcp):
-    """Exactly 4 tools are registered — no accidental extras."""
+    """Exactly 5 tools are registered — no accidental extras."""
     tools = await registered_mcp.list_tools()
-    assert len(tools) == 4
+    assert len(tools) == 5
 
 
 # ---------------------------------------------------------------------------

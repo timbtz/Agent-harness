@@ -52,6 +52,14 @@ def create_router(knowledge: KnowledgeService, projects: ProjectsService) -> API
         await _require_project(project_id, projects)
         return await projects.get_timeline(project_id)
 
+    @router.delete("/projects/{project_id}/episodes/{episode_id}")
+    async def delete_episode(project_id: str, episode_id: str):
+        await _require_project(project_id, projects)
+        deleted = await projects.delete_episode(project_id, episode_id)
+        if not deleted:
+            raise HTTPException(404, detail=f"Episode '{episode_id}' not found")
+        return {"deleted": True, "episode_id": episode_id}
+
     return router
 
 

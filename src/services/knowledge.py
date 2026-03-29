@@ -145,6 +145,7 @@ class KnowledgeService:
                     source="graph",
                     entity_name=edge.name,
                     created_at=getattr(edge, "created_at", None),
+                    invalid_at=getattr(edge, "invalid_at", None),
                 )
             )
 

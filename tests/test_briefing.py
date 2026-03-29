@@ -154,3 +154,57 @@ async def test_briefing_key_decisions_shows_fact_content(tmp_path):
     # The relationship type may appear as a label prefix, but the fact content must also be present
     # The line must NOT consist solely of the edge type name with no fact appended
     assert "MIGRATED_AWAY_TO: We migrated from PostgreSQL to SQLite" in result
+
+
+async def test_briefing_filters_superseded_facts_when_current_available(tmp_path):
+    """When both current and superseded facts exist, only current appears in Key Decisions."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    project = await projects.create_project("Test Project", "desc")
+    await projects.create_episode(project.project_id, "Some decision was captured", "decision")
+
+    superseded = SearchResult(
+        content="Old approach using PostgreSQL",
+        score=0.9,
+        source="graph",
+        entity_name="USED",
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        invalid_at=datetime(2026, 2, 1, tzinfo=timezone.utc),  # superseded
+    )
+    current = SearchResult(
+        content="New approach using SQLite",
+        score=0.8,
+        source="graph",
+        entity_name="NOW_USES",
+        created_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        invalid_at=None,  # still valid
+    )
+    knowledge = _make_knowledge(search_results=[superseded, current])
+
+    result = await generate_briefing(project, knowledge, projects)
+
+    assert "New approach using SQLite" in result
+    assert "~~" not in result   # No strikethrough when a current fact exists
+
+
+async def test_briefing_marks_superseded_as_fallback_when_no_current_exists(tmp_path):
+    """When all search results are superseded, shows them with strikethrough marker."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    project = await projects.create_project("Test Project", "desc")
+    await projects.create_episode(project.project_id, "Some decision was captured", "decision")
+
+    all_superseded = SearchResult(
+        content="Ancient approach no longer used",
+        score=1.0,
+        source="graph",
+        entity_name="USED_TO_USE",
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        invalid_at=datetime(2026, 1, 15, tzinfo=timezone.utc),
+    )
+    knowledge = _make_knowledge(search_results=[all_superseded])
+
+    result = await generate_briefing(project, knowledge, projects)
+
+    # Falls back to showing superseded fact with visual marker
+    assert "Ancient approach no longer used" in result
+    assert "~~" in result
+    assert "superseded" in result

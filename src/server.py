@@ -78,6 +78,16 @@ async def main_async() -> None:
         worker_tasks.append(t)
     logger.info(f"Started {settings.extraction_workers} extraction workers")
 
+    # Re-queue episodes orphaned by a previous restart
+    orphaned = await projects.get_all_orphaned_episodes()
+    if orphaned:
+        for ep in orphaned:
+            if ep.status == "processing":
+                # Was mid-extraction when server died — reset to pending
+                await projects.update_episode_status(ep.episode_id, "pending")
+            await extraction_queue.put((ep.episode_id, ep.content, ep.category, ep.project_id))
+        logger.info(f"Re-queued {len(orphaned)} orphaned episode(s) from previous run")
+
     # Create FastMCP server
     mcp = FastMCP(name="agent-harness", version="0.1.0")
     register_tools(mcp, knowledge, projects, extraction_queue)

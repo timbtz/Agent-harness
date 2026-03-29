@@ -12,6 +12,7 @@ def register_tools(
     projects: ProjectsService,
     extraction_queue: asyncio.Queue,
 ) -> None:
+    from src.tools.forget import make_forget
     from src.tools.init_project import make_init_project
     from src.tools.prime import make_prime
     from src.tools.recall import make_recall
@@ -21,3 +22,4 @@ def register_tools(
     make_remember(mcp, knowledge, projects, extraction_queue)
     make_recall(mcp, knowledge, projects)
     make_prime(mcp, knowledge, projects)
+    make_forget(mcp, projects)

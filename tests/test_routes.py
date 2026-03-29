@@ -12,6 +12,27 @@ from fastapi import FastAPI
 
 from src.api.routes import create_router
 from src.models import Project
+from src.services.projects import ProjectsService
+
+
+def _make_settings(tmp_path):
+    settings = MagicMock()
+    settings.sqlite_path_resolved = tmp_path / "test.db"
+    return settings
+
+
+def _make_knowledge():
+    k = MagicMock()
+    k.check_connection = AsyncMock(return_value=True)
+    k.get_graph_data = AsyncMock(return_value={"nodes": [], "edges": []})
+    return k
+
+
+def _create_test_app(projects, knowledge):
+    app = FastAPI()
+    router = create_router(knowledge, projects)
+    app.include_router(router, prefix="/api")
+    return app
 
 
 # ---------------------------------------------------------------------------
@@ -237,3 +258,51 @@ async def test_timeline_found(test_app, mock_projects):
 
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/projects/{project_id}/episodes/{episode_id} (Task 15)
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_episode_success(tmp_path):
+    """DELETE returns 200 with deleted=True when episode exists."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    project = await projects.create_project("Test Project", "desc")
+    ep = await projects.create_episode(project.project_id, "Content to delete here now", "decision")
+    knowledge = _make_knowledge()
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.delete(
+            f"/api/projects/{project.project_id}/episodes/{ep.episode_id}"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["deleted"] is True
+    assert response.json()["episode_id"] == ep.episode_id
+
+
+async def test_delete_episode_not_found(tmp_path):
+    """DELETE returns 404 when episode does not exist."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    await projects.create_project("Test Project", "desc")
+    knowledge = _make_knowledge()
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.delete("/api/projects/test-project/episodes/ep_nonexistent")
+
+    assert response.status_code == 404
+
+
+async def test_delete_episode_project_not_found(tmp_path):
+    """DELETE returns 404 when project does not exist."""
+    projects = await ProjectsService.create(_make_settings(tmp_path))
+    knowledge = _make_knowledge()
+    app = _create_test_app(projects, knowledge)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.delete("/api/projects/nonexistent-proj/episodes/ep_abc")
+
+    assert response.status_code == 404

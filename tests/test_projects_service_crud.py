@@ -275,3 +275,104 @@ async def test_get_episodes_for_fallback_includes_failed(tmp_path):
     assert ep3.episode_id in returned_ids      # pending — included
     assert len(results) == 2
     assert {"failed", "pending"} == {ep.status for ep in results}
+
+
+# ---------------------------------------------------------------------------
+# get_all_orphaned_episodes (Task 4)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_all_orphaned_episodes_returns_pending_and_processing(tmp_path):
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    p1 = await svc.create_project("Project One", "desc")
+    p2 = await svc.create_project("Project Two", "desc")
+
+    ep1 = await svc.create_episode(p1.project_id, "Episode one content here", "decision")
+    ep2 = await svc.create_episode(p2.project_id, "Episode two content here", "insight")
+    ep3 = await svc.create_episode(p1.project_id, "Episode three content", "goal")
+
+    # ep1 → processing (interrupted mid-extraction), ep2 → complete, ep3 → pending (default)
+    await svc.update_episode_status(ep1.episode_id, "processing")
+    await svc.update_episode_status(ep2.episode_id, "complete")
+
+    orphaned = await svc.get_all_orphaned_episodes()
+
+    assert len(orphaned) == 2
+    ids = {ep.episode_id for ep in orphaned}
+    assert ep1.episode_id in ids   # processing
+    assert ep3.episode_id in ids   # pending
+    assert ep2.episode_id not in ids  # complete — must NOT appear
+
+
+async def test_get_all_orphaned_episodes_empty_when_all_complete(tmp_path):
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    p = await svc.create_project("Project", "desc")
+    ep = await svc.create_episode(p.project_id, "Some content here yes", "decision")
+    await svc.update_episode_status(ep.episode_id, "complete")
+
+    orphaned = await svc.get_all_orphaned_episodes()
+
+    assert orphaned == []
+
+
+async def test_get_all_orphaned_episodes_empty_db(tmp_path):
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+
+    orphaned = await svc.get_all_orphaned_episodes()
+
+    assert orphaned == []
+
+
+async def test_get_all_orphaned_episodes_orders_oldest_first(tmp_path):
+    """Orphaned episodes are returned ASC (oldest first) for sequential re-extraction."""
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    p = await svc.create_project("Project", "desc")
+    ep1 = await svc.create_episode(p.project_id, "First episode created here for ordering", "decision")
+    ep2 = await svc.create_episode(p.project_id, "Second episode created here for ordering", "insight")
+
+    orphaned = await svc.get_all_orphaned_episodes()
+
+    assert orphaned[0].episode_id == ep1.episode_id
+    assert orphaned[1].episode_id == ep2.episode_id
+
+
+# ---------------------------------------------------------------------------
+# delete_episode (Task 11)
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_episode_returns_true_when_found(tmp_path):
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    p = await svc.create_project("My Project", "desc")
+    ep = await svc.create_episode(p.project_id, "Content to be deleted here", "decision")
+
+    result = await svc.delete_episode(p.project_id, ep.episode_id)
+
+    assert result is True
+    # Episode no longer retrievable
+    remaining = await svc.get_recent_episodes(p.project_id, limit=10)
+    assert all(e.episode_id != ep.episode_id for e in remaining)
+
+
+async def test_delete_episode_returns_false_when_not_found(tmp_path):
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    p = await svc.create_project("My Project", "desc")
+
+    result = await svc.delete_episode(p.project_id, "ep_nonexistent000")
+
+    assert result is False
+
+
+async def test_delete_episode_cannot_delete_across_projects(tmp_path):
+    """project_id boundary: cannot delete another project's episode."""
+    svc = await ProjectsService.create(_make_settings(tmp_path))
+    p1 = await svc.create_project("Project One", "desc")
+    p2 = await svc.create_project("Project Two", "desc")
+    ep = await svc.create_episode(p1.project_id, "Content in project one here", "decision")
+
+    result = await svc.delete_episode(p2.project_id, ep.episode_id)  # wrong project_id
+
+    assert result is False
+    # Original episode still exists
+    remaining = await svc.get_recent_episodes(p1.project_id, limit=10)
+    assert any(e.episode_id == ep.episode_id for e in remaining)
