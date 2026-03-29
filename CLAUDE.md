@@ -9,7 +9,7 @@
 
 **Agent Harness** is an open-source MCP server providing persistent, structured knowledge graph memory for AI coding agents (Claude Code). It captures decisions, insights, errors, and architectural choices as a temporal knowledge graph — so agents start each session already knowing what happened in previous sessions.
 
-**4 MCP tools:** `prime` · `remember` · `recall` · `init_project`
+**5 MCP tools:** `prime` · `remember` · `recall` · `init_project` · `forget`
 
 **Distribution:** PyPI package (`agent-harness`) run via `uvx agent-harness`.
 
@@ -81,11 +81,12 @@ agent-harness/
 │   │   ├── prime.py            # Session briefing
 │   │   ├── remember.py         # Knowledge ingestion (async extraction)
 │   │   ├── recall.py           # Hybrid search
-│   │   └── init_project.py     # Project creation/retrieval
+│   │   ├── init_project.py     # Project creation/retrieval
+│   │   └── forget.py           # Episode deletion by ID
 │   ├── services/
 │   │   ├── knowledge.py        # Graphiti wrapper (per-project cache) + get_graph_data()
 │   │   ├── briefing.py         # Briefing generation for prime()
-│   │   ├── projects.py         # SQLite CRUD: projects + episodes, get_insights(), get_timeline()
+│   │   ├── projects.py         # SQLite CRUD: projects + episodes, delete_project(), get_insights(), get_timeline(), get_all_orphaned_episodes()
 │   │   └── scanner.py          # Repo scanner: reads config files + folder tree → architecture episodes
 │   └── api/routes.py           # REST endpoints for dashboard
 └── tests/
@@ -189,6 +190,15 @@ Create or retrieve project namespace. **Idempotent.**
 - `scan_repo=True` reads (if found): `package.json`, `pyproject.toml`, `requirements.txt`, `docker-compose.yml`, `docker-compose.yaml`, `README.md`, `README.rst`, `docs/*.md` (up to 5), folder tree (2 levels deep). Each file → one `architecture` episode enqueued async. Scan only runs for **new** projects, not existing ones.
 - Returns (created): `{"project_id":"...","status":"created","name":"...","description":"...","scan_repo_queued":true}`
 - Returns (existing): `{"project_id":"...","status":"existing","name":"...","description":"..."}`
+
+### `forget(project_id: str, episode_id: str) → dict`
+Delete a stored knowledge item by its episode ID.
+- `episode_id` is returned by `remember()` in the `episode_id` field
+- Removes the SQLite record; excludes episode from all future keyword fallback searches
+- Graph entities already extracted into FalkorDB may persist (Graphiti does not expose per-episode deletion)
+- Returns: `{"deleted":true,"episode_id":"ep_...","note":"SQLite record removed. Graph entities from extraction may persist."}`
+
+Errors: project not found → `ToolError`; episode not found → `ToolError`
 
 ---
 
@@ -312,14 +322,15 @@ MCP_ENV_FILE=/absolute/path/.env # Load config from explicit path
 | `src/server.py` | Dual transport entry point, startup sequence, graceful shutdown |
 | `src/config.py` | All env vars via Pydantic Settings |
 | `src/models.py` | Episode (with status field), Project, SearchResult models |
-| `src/tools/prime.py` | Briefing queries → ≤400 token output |
+| `src/tools/prime.py` | Briefing queries → ≤400 token output; filters `invalid_at` edges, marks superseded facts |
 | `src/tools/remember.py` | Sync store → enqueue for async extraction |
 | `src/tools/recall.py` | Hybrid search + raw episode fallback → ≤500 token output |
 | `src/tools/init_project.py` | Idempotent project creation, optional repo scan |
+| `src/tools/forget.py` | Delete episode from SQLite by ID |
 | `src/services/knowledge.py` | Graphiti wrapper: `_graphiti_group_id()` sanitizer, `add_episode()`, `search()`, `get_graph_data()` (via `asyncio.to_thread`) |
-| `src/services/projects.py` | SQLite CRUD: projects + episodes; `get_episodes_for_fallback()` (pending+processing+failed), `get_insights()` (paginated), `get_timeline()` |
+| `src/services/projects.py` | SQLite CRUD: projects + episodes; `get_episodes_for_fallback()`, `get_insights()` (paginated), `get_timeline()`, `delete_project()` (cascade), `delete_episode()`, `get_all_orphaned_episodes()` |
 | `src/services/scanner.py` | Repo scanner: reads config files + folder tree, enqueues `architecture` episodes |
-| `src/api/routes.py` | REST: `/api/health`, `/api/projects`, `/graph`, `/insights`, `/timeline` |
+| `src/api/routes.py` | REST: `/api/health`, `/api/projects`, `/graph`, `/insights`, `/timeline`, `/search`; `DELETE` project + episode |
 | `docker-compose.yml` | FalkorDB only (no MCP server) |
 | `.env.example` | Config template |
 | `pyproject.toml` | `agent-harness = "src.server:main"` console script |

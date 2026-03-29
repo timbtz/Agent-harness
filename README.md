@@ -118,7 +118,7 @@ At session start, always call: prime("my-app")
 
 ### `prime(project_id)` → str
 
-Call at the **start of every session**. Returns a compressed briefing in under 400 tokens.
+Call at the **start of every session**. Returns a compressed briefing in under 400 tokens. Superseded facts are marked with `~~strikethrough~~ (superseded)` so the agent can distinguish current state from historical context.
 
 ```
 ## Project: My App
@@ -192,18 +192,42 @@ Create or retrieve a project namespace. **Idempotent** — safe to call multiple
 
 ---
 
+### `forget(project_id, episode_id)` → dict
+
+Delete a stored knowledge item by its episode ID.
+
+- `episode_id` is returned by `remember()` in the `episode_id` field
+- Removes the SQLite record and excludes the episode from all future keyword fallback searches
+- Graph entities already extracted into FalkorDB may persist (noted in the response)
+
+**Response:**
+```json
+{
+  "deleted": true,
+  "episode_id": "ep_a3f9c12b",
+  "note": "SQLite record removed. Graph entities from extraction may persist."
+}
+```
+
+Error if `project_id` not found or `episode_id` not found in that project.
+
+---
+
 ## REST API (Dashboard)
 
-The server also exposes a REST API on `http://localhost:8080` for a future dashboard.
+The server exposes a REST API on `http://localhost:8080` for the dashboard.
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/health` | Server health + FalkorDB connection status |
 | `GET /api/projects` | List all projects |
 | `GET /api/projects/{id}` | Get project details |
+| `DELETE /api/projects/{id}` | Delete a project and all its episodes |
 | `GET /api/projects/{id}/graph` | Knowledge graph nodes + edges |
 | `GET /api/projects/{id}/insights` | Paginated episodes (`?page=1&limit=20&category=decision`) |
 | `GET /api/projects/{id}/timeline` | Episodes in chronological order |
+| `POST /api/projects/{id}/search` | Search knowledge (graph + raw fallback) — body: `{"query": "...", "limit": 10}` |
+| `DELETE /api/projects/{id}/episodes/{ep_id}` | Delete a single episode |
 
 ---
 
@@ -256,6 +280,8 @@ remember() called
                   └─ failure → status=failed (raw text still searchable)
 ```
 
+Episodes with `status=pending` or `status=processing` at shutdown are automatically re-queued when the server restarts, so no knowledge is lost across restarts.
+
 ### Project Isolation
 
 Each project has its own FalkorDB graph. `KnowledgeService` translates `project_id` to a Graphiti `group_id` by replacing hyphens with underscores (`my-app` → `my_app`) — required because RediSearch (FalkorDB's full-text engine) treats hyphens as NOT operators in query strings. The FalkorDB graph name itself keeps the original hyphenated `project_id`. Cross-project contamination is prevented at the search layer by always filtering on `group_id`.
@@ -285,13 +311,14 @@ uv run ruff check src/
 
 ### Test Coverage
 
-The test suite (130 tests) covers all components without requiring live services:
-- All 4 MCP tool handlers (validation, success/error paths, queue behavior)
+The test suite (161 tests) covers all components without requiring live services:
+- All 5 MCP tool handlers (validation, success/error paths, queue behavior)
 - ProjectsService CRUD (SQLite with real temp databases)
 - KnowledgeService (mocked Graphiti and FalkorDB)
 - FastAPI REST routes (httpx ASGI transport)
 - MCP tool registration (parameter schemas, required fields)
 - Repo scanner (file reading, truncation, folder tree)
+- Integration test scaffold (`tests/integration/`) for live-stack validation with real FalkorDB
 
 ---
 

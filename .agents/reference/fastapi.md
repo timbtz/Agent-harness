@@ -201,12 +201,30 @@ async def _require_project(project_id: str, projects: ProjectsService):
 ### Route Summary
 
 ```
-GET  /api/health                              → Service status + FalkorDB connection
-GET  /api/projects                            → List all projects with stats
-GET  /api/projects/{project_id}               → Project details
-GET  /api/projects/{project_id}/graph         → Nodes + edges for graph visualization
-GET  /api/projects/{project_id}/insights      → Paginated knowledge items (filterable by category)
-GET  /api/projects/{project_id}/timeline      → Chronological episode list
+GET    /api/health                                           → Service status + FalkorDB connection
+GET    /api/projects                                         → List all projects with stats
+GET    /api/projects/{project_id}                            → Project details
+DELETE /api/projects/{project_id}                            → Delete project + cascade all episodes
+GET    /api/projects/{project_id}/graph                      → Nodes + edges for graph visualization
+GET    /api/projects/{project_id}/insights                   → Paginated knowledge items (filterable by category)
+GET    /api/projects/{project_id}/timeline                   → Chronological episode list
+POST   /api/projects/{project_id}/search                     → Search knowledge (graph + raw fallback)
+DELETE /api/projects/{project_id}/episodes/{episode_id}      → Delete a single episode
+```
+
+#### `POST /api/projects/{project_id}/search` — request/response
+
+```python
+# Request body (SearchRequest Pydantic model)
+{"query": str,   # 3–500 chars, required
+ "limit": int}   # 1–50, default 10
+
+# Response
+{"query": str, "results": list[SearchResult], "total": int}
+
+# SearchResult fields: content, score, source ("graph"|"raw_episode"),
+#   entity_name, created_at, invalid_at
+# Graph results: score=1.0; raw episode fallback: score=0.5
 ```
 
 ---
