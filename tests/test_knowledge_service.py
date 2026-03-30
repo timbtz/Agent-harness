@@ -243,19 +243,34 @@ async def test_search_maps_invalid_at_from_edge(svc):
 
 async def test_get_graph_data_structure(svc):
     """Returns dict with 'nodes' and 'edges' keys on success."""
+    # Entity nodes: uuid, name, summary, created_at
     mock_nodes_result = MagicMock()
     mock_nodes_result.result_set = [
-        ["uuid-1", "EntityA", "Summary A"],
-        ["uuid-2", "EntityB", "Summary B"],
+        ["uuid-1", "EntityA", "Summary A", None],
+        ["uuid-2", "EntityB", "Summary B", None],
     ]
 
+    # Episodic nodes: uuid, name, content, created_at
+    mock_episodic_result = MagicMock()
+    mock_episodic_result.result_set = []
+
+    # Entity→Entity edges: a.uuid, b.uuid, fact, type, uuid, valid_at, invalid_at
     mock_edges_result = MagicMock()
     mock_edges_result.result_set = [
-        ["uuid-1", "uuid-2", "A relates to B", "RELATES_TO"],
+        ["uuid-1", "uuid-2", "A relates to B", "RELATES_TO", "edge-1", None, None],
     ]
 
+    # Episodic→Entity MENTIONS edges: e.uuid, n.uuid
+    mock_mentions_result = MagicMock()
+    mock_mentions_result.result_set = []
+
     mock_graph = MagicMock()
-    mock_graph.query.side_effect = [mock_nodes_result, mock_edges_result]
+    mock_graph.query.side_effect = [
+        mock_nodes_result,
+        mock_episodic_result,
+        mock_edges_result,
+        mock_mentions_result,
+    ]
 
     mock_db = MagicMock()
     mock_db.select_graph.return_value = mock_graph
@@ -270,3 +285,4 @@ async def test_get_graph_data_structure(svc):
     assert data["nodes"][0]["id"] == "uuid-1"
     assert data["nodes"][0]["name"] == "EntityA"
     assert data["edges"][0]["fact"] == "A relates to B"
+    assert data["edges"][0]["stale"] is False

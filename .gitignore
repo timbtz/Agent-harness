@@ -22,3 +22,8 @@ dist/
 # IDE
 .vscode/
 .idea/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.lovable

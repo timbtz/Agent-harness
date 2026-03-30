@@ -67,6 +67,22 @@ def create_router(knowledge: KnowledgeService, projects: ProjectsService) -> API
             raise HTTPException(404, detail=f"Episode '{episode_id}' not found")
         return {"deleted": True, "episode_id": episode_id}
 
+    @router.delete("/projects/{project_id}/graph/nodes/{node_id}")
+    async def delete_graph_node(project_id: str, node_id: str):
+        await _require_project(project_id, projects)
+        deleted = await knowledge.delete_node(project_id, node_id)
+        if not deleted:
+            raise HTTPException(404, detail=f"Node '{node_id}' not found in project '{project_id}'")
+        return {"deleted": True, "node_id": node_id}
+
+    @router.delete("/projects/{project_id}/graph/edges/{edge_id}")
+    async def delete_graph_edge(project_id: str, edge_id: str):
+        await _require_project(project_id, projects)
+        deleted = await knowledge.delete_edge(project_id, edge_id)
+        if not deleted:
+            raise HTTPException(404, detail=f"Edge '{edge_id}' not found in project '{project_id}'")
+        return {"deleted": True, "edge_id": edge_id}
+
     @router.delete("/projects/{project_id}")
     async def delete_project(project_id: str):
         await _require_project(project_id, projects)

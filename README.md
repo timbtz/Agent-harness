@@ -223,11 +223,58 @@ The server exposes a REST API on `http://localhost:8080` for the dashboard.
 | `GET /api/projects` | List all projects |
 | `GET /api/projects/{id}` | Get project details |
 | `DELETE /api/projects/{id}` | Delete a project and all its episodes |
-| `GET /api/projects/{id}/graph` | Knowledge graph nodes + edges |
+| `GET /api/projects/{id}/graph` | Knowledge graph nodes + edges (entity + episodic nodes, all edges including superseded) |
 | `GET /api/projects/{id}/insights` | Paginated episodes (`?page=1&limit=20&category=decision`) |
 | `GET /api/projects/{id}/timeline` | Episodes in chronological order |
 | `POST /api/projects/{id}/search` | Search knowledge (graph + raw fallback) — body: `{"query": "...", "limit": 10}` |
 | `DELETE /api/projects/{id}/episodes/{ep_id}` | Delete a single episode |
+| `DELETE /api/projects/{id}/graph/nodes/{node_id}` | Remove an entity node and all its edges from the graph |
+| `DELETE /api/projects/{id}/graph/edges/{edge_id}` | Remove a specific relationship edge from the graph |
+
+---
+
+## Dashboard
+
+The `frontend/` directory contains a React + Three.js dashboard for exploring the knowledge graph visually.
+
+```bash
+cd frontend
+npm install
+npm run dev      # dev server at http://localhost:5173 (proxies /api to :8080)
+npm run build    # production build → frontend/dist/
+```
+
+### Graph view
+
+The 3D canvas renders two node types:
+
+| Shape | Colour | Represents |
+|-------|--------|------------|
+| Icosahedron | White → deep indigo (freshness gradient) | Entity nodes — extracted concepts and actors |
+| Octahedron ◆ | Category colour (see below) | Episodic nodes — original `remember()` entries |
+
+Entity node brightness encodes recency: recently created/updated nodes are pure white; older nodes fade to deep indigo (`#3d2a6e`).
+
+Episode category colours:
+
+| Category | Colour |
+|----------|--------|
+| `decision` | Amber `#f59e0b` |
+| `insight` | Cyan `#06b6d4` |
+| `error` | Red `#ef4444` |
+| `goal` | Green `#10b981` |
+| `architecture` | Purple `#8b5cf6` |
+
+### Temporal scrubber
+
+A slider at the bottom of the canvas lets you travel through time. By default only active (non-superseded) edges are shown. Dragging the slider to any past date filters nodes and edges to their state at that moment — superseded relationships reappear, not-yet-created nodes disappear. The "× Reset" button returns to the live view.
+
+### Navigation
+
+- **Click any node** → camera smoothly flies to it; NodeDetailPanel opens on the right.
+- **NodeDetailPanel connections** → clicking a neighbour node name (Outgoing or Incoming) selects that node, updates the panel, and flies the camera to it. Enables chain traversal without touching the canvas.
+- **Episodes / Timeline tab** → clicking an episode card flies the camera to the matching episodic node in the graph.
+- **Search tab** → clicking a search result flies the camera to the matching entity node.
 
 ---
 

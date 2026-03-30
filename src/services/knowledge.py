@@ -152,6 +152,10 @@ class KnowledgeService:
         return search_results[:limit]
 
     async def get_graph_data(self, project_id: str) -> dict:
+        import re
+
+        _cat_re = re.compile(r"^\[([A-Z]+)\]\s*")
+
         def _query() -> dict:
             from falkordb import FalkorDB
 
@@ -160,22 +164,91 @@ class KnowledgeService:
                 port=self._settings.falkordb_port,
             )
             g = db.select_graph(project_id)
+            gid = _graphiti_group_id(project_id)
+
+            # Entity nodes (semantic facts)
             nodes_result = g.query(
-                "MATCH (n:Entity) WHERE n.group_id = $gid RETURN n.uuid, n.name, n.summary",
-                params={"gid": _graphiti_group_id(project_id)},
+                "MATCH (n:Entity) WHERE n.group_id = $gid RETURN n.uuid, n.name, n.summary, n.created_at",
+                params={"gid": gid},
             )
-            nodes = [{"id": row[0], "name": row[1], "summary": row[2]} for row in nodes_result.result_set if row[0]]
+            nodes = [
+                {
+                    "id": row[0],
+                    "name": row[1],
+                    "summary": row[2],
+                    "node_type": "entity",
+                    "created_at": str(row[3]) if row[3] else None,
+                }
+                for row in nodes_result.result_set
+                if row[0]
+            ]
+
+            # Episodic nodes (original episodes with category prefix)
+            episodic_result = g.query(
+                "MATCH (e:Episodic) WHERE e.group_id = $gid RETURN e.uuid, e.name, e.content, e.created_at",
+                params={"gid": gid},
+            )
+            for row in episodic_result.result_set:
+                if not row[0]:
+                    continue
+                content = row[2] or ""
+                m = _cat_re.match(content)
+                category = m.group(1).lower() if m else "insight"
+                clean = _cat_re.sub("", content)
+                nodes.append(
+                    {
+                        "id": row[0],
+                        "name": row[1] or f"ep-{row[0][:8]}",
+                        "summary": clean,
+                        "node_type": "episodic",
+                        "category": category,
+                        "created_at": str(row[3]) if row[3] else None,
+                    }
+                )
+
+            # Entity→Entity semantic edges (include stale/superseded for temporal scrubber)
             edges_result = g.query(
                 "MATCH (a:Entity)-[r]->(b:Entity) "
-                "WHERE r.group_id = $gid AND r.invalid_at IS NULL "
-                "RETURN a.uuid, b.uuid, r.fact, type(r)",
-                params={"gid": _graphiti_group_id(project_id)},
+                "WHERE r.group_id = $gid "
+                "RETURN a.uuid, b.uuid, r.fact, type(r), r.uuid, r.valid_at, r.invalid_at",
+                params={"gid": gid},
             )
             edges = [
-                {"source": row[0], "target": row[1], "fact": row[2], "type": row[3]}
+                {
+                    "source": row[0],
+                    "target": row[1],
+                    "fact": row[2],
+                    "type": row[3],
+                    "id": row[4],
+                    "created_at": str(row[5]) if row[5] else None,
+                    "invalid_at": str(row[6]) if row[6] else None,
+                    "stale": row[6] is not None,
+                    "edge_kind": "semantic",
+                }
                 for row in edges_result.result_set
                 if row[0] and row[1]
             ]
+
+            # Episodic→Entity MENTIONS edges
+            mentions_result = g.query(
+                "MATCH (e:Episodic)-[r:MENTIONS]->(n:Entity) "
+                "WHERE e.group_id = $gid "
+                "RETURN e.uuid, n.uuid",
+                params={"gid": gid},
+            )
+            for row in mentions_result.result_set:
+                if row[0] and row[1]:
+                    edges.append(
+                        {
+                            "source": row[0],
+                            "target": row[1],
+                            "fact": "mentions",
+                            "type": "MENTIONS",
+                            "id": f"m-{row[0][:8]}-{row[1][:8]}",
+                            "edge_kind": "mentions",
+                        }
+                    )
+
             return {"nodes": nodes, "edges": edges}
 
         try:
@@ -183,3 +256,51 @@ class KnowledgeService:
         except Exception as e:
             logger.warning(f"Graph data query failed for {project_id}: {e}")
             return {"nodes": [], "edges": []}
+
+    async def delete_node(self, project_id: str, node_id: str) -> bool:
+        def _query() -> bool:
+            from falkordb import FalkorDB
+
+            db = FalkorDB(host=self._settings.falkordb_host, port=self._settings.falkordb_port)
+            g = db.select_graph(project_id)
+            check = g.query(
+                "MATCH (n:Entity) WHERE n.uuid = $node_id AND n.group_id = $gid RETURN n.uuid",
+                params={"node_id": node_id, "gid": _graphiti_group_id(project_id)},
+            )
+            if not check.result_set:
+                return False
+            g.query(
+                "MATCH (n:Entity) WHERE n.uuid = $node_id DETACH DELETE n",
+                params={"node_id": node_id},
+            )
+            return True
+
+        try:
+            return await asyncio.to_thread(_query)
+        except Exception as e:
+            logger.warning(f"Node deletion failed for {node_id} in {project_id}: {e}")
+            return False
+
+    async def delete_edge(self, project_id: str, edge_id: str) -> bool:
+        def _query() -> bool:
+            from falkordb import FalkorDB
+
+            db = FalkorDB(host=self._settings.falkordb_host, port=self._settings.falkordb_port)
+            g = db.select_graph(project_id)
+            check = g.query(
+                "MATCH ()-[r]->() WHERE r.uuid = $edge_id AND r.group_id = $gid RETURN r.uuid",
+                params={"edge_id": edge_id, "gid": _graphiti_group_id(project_id)},
+            )
+            if not check.result_set:
+                return False
+            g.query(
+                "MATCH ()-[r]->() WHERE r.uuid = $edge_id DELETE r",
+                params={"edge_id": edge_id},
+            )
+            return True
+
+        try:
+            return await asyncio.to_thread(_query)
+        except Exception as e:
+            logger.warning(f"Edge deletion failed for {edge_id} in {project_id}: {e}")
+            return False
