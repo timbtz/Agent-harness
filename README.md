@@ -264,6 +264,8 @@ Episode category colours:
 | `error` | Red `#ef4444` |
 | `goal` | Green `#10b981` |
 | `architecture` | Purple `#8b5cf6` |
+<img width="1917" height="908" alt="Screenshot 2026-03-30 140423" src="https://github.com/user-attachments/assets/73ac33e7-b866-47cd-a95c-296247a7ebb4" />
+
 
 ### Temporal scrubber
 
