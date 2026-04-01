@@ -9,6 +9,7 @@ export function useProjectInsights(projectId: string | null, category?: string) 
     queryKey: ['insights', projectId, category],
     queryFn: () => api.getProjectInsights(projectId!, 1, 50, category),
     enabled: !!projectId,
+    refetchInterval: 5000,
   });
   useEffect(() => {
     if (query.error) toast({ title: 'Failed to load episodes', variant: 'destructive' });

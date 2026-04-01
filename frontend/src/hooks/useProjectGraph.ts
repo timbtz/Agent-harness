@@ -10,6 +10,7 @@ export function useProjectGraph(projectId: string | null) {
     queryFn: () => api.getProjectGraph(projectId!),
     enabled: !!projectId,
     retry: 2,
+    refetchInterval: 5000,
   });
   useEffect(() => {
     if (query.error) toast({ title: 'Failed to load graph', description: String(query.error), variant: 'destructive' });

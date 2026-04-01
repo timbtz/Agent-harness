@@ -15,11 +15,15 @@ logger = logging.getLogger(__name__)
 
 
 def _graphiti_group_id(project_id: str) -> str:
-    """Sanitize project_id for use as Graphiti group_id.
+    """Sanitize project_id for use as Graphiti group_id AND as the FalkorDB graph name.
 
     RediSearch treats hyphens as NOT operators in query strings.
     Replace with underscores which have no special meaning in RediSearch.
-    The FalkorDB graph name (database=) keeps the original hyphenated project_id.
+
+    IMPORTANT: Graphiti's add_episode() uses group_id as the FalkorDB graph name
+    (it calls driver.clone(database=group_id) when group_id != driver._database).
+    So the FalkorDB graph name IS the sanitized group_id (underscores), not the
+    original project_id (hyphens). All direct FalkorDB queries must use this name.
     """
     return project_id.replace("-", "_")
 
@@ -99,7 +103,7 @@ class KnowledgeService:
             driver = FalkorDriver(
                 host=self._settings.falkordb_host,
                 port=self._settings.falkordb_port,
-                database=project_id,
+                database=_graphiti_group_id(project_id),
             )
             g = Graphiti(
                 graph_driver=driver,
@@ -163,13 +167,15 @@ class KnowledgeService:
                 host=self._settings.falkordb_host,
                 port=self._settings.falkordb_port,
             )
-            g = db.select_graph(project_id)
             gid = _graphiti_group_id(project_id)
+            g = db.select_graph(gid)
 
             # Entity nodes (semantic facts)
+            # Note: Entity nodes in graphiti-core do not carry a group_id property —
+            # group_id lives on edges and Episodic nodes. Since each project has its own
+            # isolated FalkorDB graph (database=project_id), we query all Entity nodes.
             nodes_result = g.query(
-                "MATCH (n:Entity) WHERE n.group_id = $gid RETURN n.uuid, n.name, n.summary, n.created_at",
-                params={"gid": gid},
+                "MATCH (n:Entity) RETURN n.uuid, n.name, n.summary, n.created_at",
             )
             nodes = [
                 {
@@ -185,8 +191,7 @@ class KnowledgeService:
 
             # Episodic nodes (original episodes with category prefix)
             episodic_result = g.query(
-                "MATCH (e:Episodic) WHERE e.group_id = $gid RETURN e.uuid, e.name, e.content, e.created_at",
-                params={"gid": gid},
+                "MATCH (e:Episodic) RETURN e.uuid, e.name, e.content, e.created_at",
             )
             for row in episodic_result.result_set:
                 if not row[0]:
@@ -262,7 +267,7 @@ class KnowledgeService:
             from falkordb import FalkorDB
 
             db = FalkorDB(host=self._settings.falkordb_host, port=self._settings.falkordb_port)
-            g = db.select_graph(project_id)
+            g = db.select_graph(_graphiti_group_id(project_id))
             check = g.query(
                 "MATCH (n:Entity) WHERE n.uuid = $node_id AND n.group_id = $gid RETURN n.uuid",
                 params={"node_id": node_id, "gid": _graphiti_group_id(project_id)},
@@ -286,7 +291,7 @@ class KnowledgeService:
             from falkordb import FalkorDB
 
             db = FalkorDB(host=self._settings.falkordb_host, port=self._settings.falkordb_port)
-            g = db.select_graph(project_id)
+            g = db.select_graph(_graphiti_group_id(project_id))
             check = g.query(
                 "MATCH ()-[r]->() WHERE r.uuid = $edge_id AND r.group_id = $gid RETURN r.uuid",
                 params={"edge_id": edge_id, "gid": _graphiti_group_id(project_id)},

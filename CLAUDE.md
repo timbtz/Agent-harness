@@ -257,7 +257,7 @@ def _graphiti_group_id(project_id: str) -> str:
     """RediSearch treats hyphens as NOT operators. Replace with underscores."""
     return project_id.replace("-", "_")
 ```
-This is a module-level function in `knowledge.py`. Every call to Graphiti that takes `group_id` or `group_ids` MUST use the sanitized value. The FalkorDB `database=` name keeps the original hyphenated `project_id`.
+This is a module-level function in `knowledge.py`. Every call to Graphiti that takes `group_id` or `group_ids` MUST use the sanitized value. **The FalkorDB graph name is ALSO the sanitized group_id** — Graphiti's `add_episode()` calls `driver.clone(database=group_id)` when `group_id != driver._database`, meaning data lands in the graph named after the group_id (underscored), not the original hyphenated `project_id`. `FalkorDriver(database=)` and all direct `db.select_graph()` calls must also use `_graphiti_group_id(project_id)`.
 
 **Graphiti search — correct API (graphiti-core 0.28.x):**
 ```python
