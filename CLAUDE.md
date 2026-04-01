@@ -372,3 +372,36 @@ uv run ruff check src/         # Zero errors
 # No stdout in MCP server code (grep exits 1 on no match — that is the desired outcome)
 grep -rn "print(" src/ && echo "FAIL: print() found" || echo "OK: no print() calls"
 ```
+
+---
+
+## 13. Skill: agent-harness
+
+The Agent Harness skill teaches coding agents the correct session workflow and
+knowledge quality standards. It lives in the repository and can be installed
+directly in Claude Code.
+
+**Location:** `.claude/skills/agent-harness/SKILL.md`
+
+Per Claude Agent SDK convention, skills live in `.claude/skills/` and are
+auto-discovered by Claude Code from that directory.
+
+**Skill files:**
+
+| File | Purpose |
+|------|---------|
+| `.claude/skills/agent-harness/SKILL.md` | Core workflow, quality standard, trigger description |
+| `.claude/skills/agent-harness/references/what-to-remember.md` | Quality gate: good examples + anti-patterns |
+| `.claude/skills/agent-harness/references/category-guide.md` | Category selection guide |
+| `.claude/skills/agent-harness/references/update-workflow.md` | Step-by-step for recording changed facts |
+
+**Iteration loop (Phase 2d):**
+
+1. Run agent sessions with the skill loaded
+2. Observe: what was remembered that shouldn't have been? What was missed?
+3. Identify the gap in `SKILL.md` or a reference file
+4. Edit the relevant file
+5. Test on the next session
+6. Commit with a note on what was fixed and why
+
+See `.claude/PRD2.md` §11 (Phase 2d) for the full iteration process.

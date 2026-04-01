@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added (Phase 2a)
+- `skills/agent-harness/` — Claude Code skill providing session workflow and
+  knowledge quality standards for Agent Harness. Includes core `SKILL.md` and
+  three progressive-disclosure reference files: `what-to-remember.md` (quality
+  gate with ❌/✅ examples), `category-guide.md` (one-liner examples per
+  category), and `update-workflow.md` (step-by-step procedure for recording
+  changed facts to trigger Graphiti's `invalid_at` contradiction detection).
+- `CLAUDE.md` §13 — Skill location, install command, and iteration loop
+  documentation.
+
 ### Added
 
 #### Backend
